@@ -513,6 +513,105 @@ app.post("/send-all-sms", async (req, res) => {
 app.post("/action", async (req, res) => { const { listingId, userName, action } = req.body; if (!listingId || !userName || !action) return res.status(400).json({ error: "Missing" }); await saveAction(listingId, userName, action); res.json({ success: true }); });
 app.post("/comment", async (req, res) => { const { listingId, userName, body } = req.body; if (!listingId || !userName || !body) return res.status(400).json({ error: "Missing" }); await saveComment(listingId, userName, body); res.json({ success: true }); });
 app.post("/seen", async (req, res) => { const { listingIds, userName } = req.body; if (!listingIds || !userName) return res.status(400).json({ error: "Missing" }); await markAllSeen(listingIds, userName); res.json({ success: true }); });
+
+app.get("/seed-history", async (req, res) => {
+  if (!db) return res.status(500).json({ error: "No database" });
+  try {
+    // Get 12 real listing IDs from the database
+    const result = await db.query("SELECT id FROM listings ORDER BY created_at ASC LIMIT 12");
+    const ids = result.rows.map(r => r.id);
+    if (ids.length < 6) return res.status(400).json({ error: "Not enough listings yet, try after a refresh" });
+
+    const [id1,id2,id3,id4,id5,id6,id7,id8,id9,id10,id11,id12] = ids;
+
+    // Insert actions spread over past week
+    const actions = [
+      [id1, 'Alex (Owner)', 'contacted', '2026-04-22 09:20:00'],
+      [id2, 'Julian', 'contacted', '2026-04-22 12:10:00'],
+      [id3, 'Nora', 'contacted', '2026-04-22 14:30:00'],
+      [id4, 'Alex (Owner)', 'contacted', '2026-04-23 08:35:00'],
+      [id5, 'Julian', 'contacted', '2026-04-23 11:00:00'],
+      [id3, 'Nora', 'pass', '2026-04-23 15:00:00'],
+      [id1, 'Alex (Owner)', 'reply', '2026-04-24 10:15:00'],
+      [id6, 'Alex (Owner)', 'contacted', '2026-04-24 09:20:00'],
+      [id7, 'Nora', 'contacted', '2026-04-24 13:45:00'],
+      [id1, 'Alex (Owner)', 'viewing', '2026-04-25 09:00:00'],
+      [id4, 'Julian', 'reply', '2026-04-25 14:00:00'],
+      [id8, 'Julian', 'contacted', '2026-04-25 09:10:00'],
+      [id9, 'Nora', 'contacted', '2026-04-25 11:30:00'],
+      [id1, 'Alex (Owner)', 'pass', '2026-04-26 08:00:00'],
+      [id9, 'Nora', 'reply', '2026-04-26 12:00:00'],
+      [id9, 'Alex (Owner)', 'viewing', '2026-04-26 16:00:00'],
+      [id10, 'Alex (Owner)', 'contacted', '2026-04-26 09:15:00'],
+      [id11, 'Julian', 'contacted', '2026-04-26 14:30:00'],
+      [id5, 'Nora', 'pass', '2026-04-26 17:00:00'],
+      [id10, 'Julian', 'reply', '2026-04-27 11:00:00'],
+      [id10, 'Alex (Owner)', 'viewing', '2026-04-27 15:00:00'],
+      [id12, 'Nora', 'contacted', '2026-04-27 10:15:00'],
+      [id7, 'Alex (Owner)', 'pass', '2026-04-27 09:00:00'],
+      [id11, 'Nora', 'reply', '2026-04-28 13:00:00'],
+      [id12, 'Julian', 'reply', '2026-04-29 08:30:00'],
+    ];
+    for (const [lid, un, action, ts] of actions) {
+      await db.query("INSERT INTO actions (listing_id, user_name, action, created_at) VALUES ($1, $2, $3, $4)", [lid, un, action, ts]);
+    }
+
+    // Insert comments
+    const comments = [
+      [id1, 'Julian', 'This looks really promising, price is good and location is close to everything', '2026-04-22 13:00:00'],
+      [id1, 'Nora', 'Agreed, someone should reach out asap', '2026-04-22 13:45:00'],
+      [id1, 'Alex (Owner)', 'Already contacted, waiting to hear back', '2026-04-22 15:00:00'],
+      [id1, 'Alex (Owner)', 'They replied, scheduling a viewing for Friday', '2026-04-24 10:20:00'],
+      [id1, 'Julian', 'Let me know how it goes!', '2026-04-24 11:00:00'],
+      [id1, 'Alex (Owner)', 'Saw it this morning. Second bedroom is really small, wouldnt work for us. Moving on', '2026-04-26 08:05:00'],
+      [id1, 'Nora', 'Ok, too bad. Keep looking', '2026-04-26 09:00:00'],
+      [id10, 'Nora', '3BR would be perfect so we each get our own room. A bit over budget but might be worth it?', '2026-04-26 09:30:00'],
+      [id10, 'Julian', 'I think we can make it work if we split 3 ways', '2026-04-26 10:00:00'],
+      [id10, 'Alex (Owner)', 'Contacted them, they replied quickly. Setting up a viewing', '2026-04-27 11:10:00'],
+      [id10, 'Nora', 'Great, fingers crossed on this one', '2026-04-27 12:00:00'],
+      [id9, 'Julian', 'This is the cheapest one we have seen that actually looks decent', '2026-04-25 11:45:00'],
+      [id9, 'Nora', 'Messaged them asking for more photos', '2026-04-25 12:30:00'],
+      [id9, 'Alex (Owner)', 'They replied, said photos are accurate. Scheduling a visit', '2026-04-26 12:10:00'],
+      [id11, 'Nora', 'Heard back from this one. They want references. Should I send our HBS emails?', '2026-04-28 13:05:00'],
+      [id11, 'Julian', 'Yes definitely, that always helps', '2026-04-28 13:30:00'],
+      [id11, 'Alex (Owner)', 'Send it. Also ask if price is negotiable', '2026-04-28 14:00:00'],
+    ];
+    for (const [lid, un, body, ts] of comments) {
+      await db.query("INSERT INTO comments (listing_id, user_name, body, created_at) VALUES ($1, $2, $3, $4)", [lid, un, body, ts]);
+    }
+
+    // Insert SMS messages
+    const smsOut = [
+      [id1, 'outbound', 'Hi, we are 3 HBS students looking for a 2-3BR Manhattan sublet June through August. Your listing looks perfect, is it still available?', 'A', '2026-04-22 09:20:00'],
+      [id2, 'outbound', 'Hello, we are Harvard MBA students looking for a furnished sublet June 1 through August 31. Would your apartment be available for those dates?', 'B', '2026-04-22 12:10:00'],
+      [id4, 'outbound', 'Hi, interested in your listing for June-Aug. We are 3 HBS students from Europe, responsible tenants. Still available?', 'A', '2026-04-23 08:35:00'],
+      [id5, 'outbound', 'Hi, is this still available June-Aug?', 'C', '2026-04-23 11:00:00'],
+      [id6, 'outbound', 'Hello, we are 3 Harvard Business School students looking for a summer sublet June through August. Your listing looks great, is it still available?', 'B', '2026-04-24 09:20:00'],
+      [id7, 'outbound', 'Hi, is your listing still available for June-August?', 'C', '2026-04-24 13:45:00'],
+      [id8, 'outbound', 'Hi, we are 3 HBS students looking for a 2-3BR Manhattan sublet June through August. Is it still available?', 'A', '2026-04-25 09:10:00'],
+      [id9, 'outbound', 'Hi, is this still available for summer?', 'C', '2026-04-25 11:30:00'],
+      [id10, 'outbound', 'Hello, we are Harvard MBA students looking for a 3BR for June 1 through August 31. Very interested, still available?', 'B', '2026-04-26 09:15:00'],
+      [id11, 'outbound', 'Hi, we are 3 HBS students looking for a 2-3BR Manhattan sublet June through August. Your listing looks great, is it still available?', 'A', '2026-04-26 14:30:00'],
+      [id12, 'outbound', 'Hi, is your listing still available June-August?', 'C', '2026-04-27 10:15:00'],
+    ];
+    const smsIn = [
+      [id1, 'inbound', 'Hi! Yes still available, happy to show it this week. When works for you?', 'A', '2026-04-24 10:12:00'],
+      [id4, 'inbound', 'Hi thanks for reaching out! Yes available. Are you looking for furnished? We can discuss price', 'A', '2026-04-25 13:55:00'],
+      [id9, 'inbound', 'Yes still available! Its a great apartment. When would you like to see it?', 'C', '2026-04-26 11:50:00'],
+      [id10, 'inbound', 'Hello! Yes available June 1. 3 students sounds perfect, we would love to show you', 'B', '2026-04-27 10:45:00'],
+      [id11, 'inbound', 'Hi yes still available! Could you share some references? Happy to chat more', 'A', '2026-04-28 12:55:00'],
+      [id12, 'inbound', 'Hi, yes available. Are you looking for the full June-August period?', 'C', '2026-04-29 08:25:00'],
+    ];
+    for (const [lid, dir, body, variant, ts] of [...smsOut, ...smsIn]) {
+      await db.query("INSERT INTO sms_messages (listing_id, direction, body, ab_variant, created_at) VALUES ($1, $2, $3, $4, $5)", [lid, dir, body, variant, ts]);
+    }
+
+    res.json({ success: true, message: `Seeded history against ${ids.length} real listings`, actions: actions.length, comments: comments.length, sms: smsOut.length + smsIn.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/refresh", async (req, res) => { try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count, dryRun: DRY_RUN }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get("/test-email", async (req, res) => { try { await sendDailySummaryEmail(); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
@@ -920,6 +1019,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="sb-section">
       <div class="sb-label">Sort by</div>
       <select class="sort-sel" id="sort-sel" onchange="sortCards()">
+        <option value="complete">Most complete first</option>
         <option value="newest">Newest first</option>
         <option value="score">Best match score</option>
         <option value="price-low">Price: low to high</option>
@@ -1106,7 +1206,7 @@ document.addEventListener("click",e=>{if(!document.getElementById("uwrap").conta
 if(newIds.length>0)setTimeout(()=>{fetch("/seen",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingIds:newIds,userName:localStorage.getItem("sublet_user")||"unknown"})});},3000);
 
 function animCount(el,target){const dur=700,start=performance.now();function step(now){const p=Math.min((now-start)/dur,1);const e=1-Math.pow(1-p,3);el.textContent=Math.round(target*e);if(p<1)requestAnimationFrame(step);}requestAnimationFrame(step);}
-window.addEventListener("load",()=>{
+window.addEventListener("load",()=>{sortCards();
   const cards=document.querySelectorAll(".card");let pending=0,contacted=0;
   cards.forEach(c=>{if(c.dataset.status==="pending")pending++;if(["contacted","reply","viewing"].includes(c.dataset.status))contacted++;});
   animCount(document.getElementById("s-new"),${newIds.length});
@@ -1255,11 +1355,19 @@ function applyFilters(){
   });
   document.getElementById("results-count").textContent=v+" listing"+(v!==1?"s":"");
 }
+function completeness(card){
+  let s=0;
+  if(parseInt(card.dataset.price)>0)s+=3;
+  if(parseInt(card.dataset.score)>0)s+=3;
+  if(card.dataset.datetime)s+=1;
+  return s;
+}
 function sortCards(){
   const sort=document.getElementById("sort-sel").value;
   const c=document.getElementById("cards-container");
   const cards=Array.from(c.querySelectorAll(".card"));
   cards.sort((a,b)=>{
+    if(sort==="complete")return completeness(b)-completeness(a)||new Date(b.dataset.datetime)-new Date(a.dataset.datetime);
     if(sort==="score")return(parseInt(b.dataset.score)||0)-(parseInt(a.dataset.score)||0);
     if(sort==="price-low")return(parseInt(a.dataset.price)||0)-(parseInt(b.dataset.price)||0);
     if(sort==="price-high")return(parseInt(b.dataset.price)||0)-(parseInt(a.dataset.price)||0);
@@ -1282,6 +1390,109 @@ document.addEventListener("keydown",e=>{
 </script>
 </body>
 </html>`);
+});
+
+
+app.get("/seed-history", async (req, res) => {
+  if (!db) return res.status(500).json({ error: "No database" });
+  try {
+    const listings = await loadListings();
+    if (!listings.length) return res.status(400).json({ error: "No listings in DB yet. Visit /refresh first." });
+    const ids = listings.slice(0, 12).map(l => l.id);
+    const names = ["Alex (Owner)", "Julian", "Nora"];
+    const now = new Date();
+    let inserted = { actions: 0, comments: 0, sms: 0 };
+
+    const actions = [
+      [ids[0], "Alex (Owner)", "contacted", 7],
+      [ids[1], "Julian", "contacted", 7],
+      [ids[2], "Nora", "contacted", 7],
+      [ids[3], "Alex (Owner)", "contacted", 6],
+      [ids[4], "Julian", "contacted", 6],
+      [ids[0], "Alex (Owner)", "reply", 5],
+      [ids[0], "Alex (Owner)", "viewing", 4],
+      [ids[0], "Alex (Owner)", "pass", 3],
+      [ids[3], "Julian", "reply", 4],
+      [ids[5], "Alex (Owner)", "contacted", 5],
+      [ids[6], "Nora", "contacted", 5],
+      [ids[5], "Nora", "reply", 3],
+      [ids[5], "Alex (Owner)", "viewing", 2],
+      [ids[7], "Julian", "contacted", 4],
+      [ids[8], "Nora", "contacted", 4],
+      [ids[7], "Julian", "reply", 2],
+      [ids[9], "Alex (Owner)", "contacted", 3],
+      [ids[10], "Julian", "contacted", 2],
+      [ids[2], "Nora", "pass", 5],
+      [ids[4], "Nora", "pass", 4],
+    ];
+
+    for (const [lid, user, action, daysAgo] of actions) {
+      if (!lid) continue;
+      const d = new Date(now); d.setDate(d.getDate() - daysAgo); d.setHours(9 + Math.floor(Math.random()*8), Math.floor(Math.random()*59));
+      await db.query("INSERT INTO actions (listing_id, user_name, action, created_at) VALUES ($1,$2,$3,$4)", [lid, user, action, d]);
+      inserted.actions++;
+    }
+
+    const comments = [
+      [ids[0], "Julian", "This one looks really good, price is fair and location is solid", 7],
+      [ids[0], "Nora", "Agreed, someone reach out fast", 7],
+      [ids[0], "Alex (Owner)", "Already contacted, waiting to hear back", 7],
+      [ids[0], "Alex (Owner)", "They replied, setting up a viewing", 5],
+      [ids[0], "Julian", "Great, let us know how it goes", 5],
+      [ids[0], "Alex (Owner)", "Saw it today. Second bedroom is tiny, not going to work for us", 3],
+      [ids[5], "Nora", "This is the best value we have seen so far, why is it so cheap?", 5],
+      [ids[5], "Julian", "Maybe smaller than the photos suggest, worth checking", 5],
+      [ids[5], "Alex (Owner)", "They replied quickly, sounds flexible on dates. Scheduling a visit", 3],
+      [ids[7], "Julian", "I like this one, neighborhood is close to my office", 4],
+      [ids[7], "Nora", "Price is a bit high but for 3 bedrooms it makes sense split three ways", 4],
+      [ids[7], "Alex (Owner)", "Contacted them this morning", 4],
+      [ids[7], "Julian", "Got a reply, they want references. Should we send our HBS emails?", 2],
+      [ids[7], "Nora", "Yes definitely do that", 2],
+      [ids[3], "Nora", "Available from May which is too early but asked if they can do June 1 start", 6],
+    ];
+
+    for (const [lid, user, body, daysAgo] of comments) {
+      if (!lid) continue;
+      const d = new Date(now); d.setDate(d.getDate() - daysAgo); d.setHours(10 + Math.floor(Math.random()*8), Math.floor(Math.random()*59));
+      await db.query("INSERT INTO comments (listing_id, user_name, body, created_at) VALUES ($1,$2,$3,$4)", [lid, user, body, d]);
+      inserted.comments++;
+    }
+
+    const variants = ["A","B","C"];
+    const outboundMessages = [
+      "Hi, we are 3 HBS students looking for a 2-3BR Manhattan sublet June through August. Your listing looks perfect, is it still available?",
+      "Hello, we are Harvard MBA students looking for a furnished sublet June 1 through August 31. Would your apartment be available for those dates?",
+      "Hi, is this still available June-Aug?",
+    ];
+    for (let i = 0; i < Math.min(ids.length, 10); i++) {
+      if (!ids[i]) continue;
+      const variant = variants[i % 3];
+      const body = outboundMessages[i % 3];
+      const d = new Date(now); d.setDate(d.getDate() - (7 - Math.floor(i/2))); d.setHours(9 + i, 0);
+      await db.query("INSERT INTO sms_messages (listing_id, direction, body, phone, ab_variant, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
+        [ids[i], "outbound", body, "+1212555010" + i, variant, d]);
+      inserted.sms++;
+    }
+
+    const replyIds = [ids[0], ids[3], ids[5], ids[7]];
+    const replies = [
+      "Hi yes still available, happy to show it this week. When works for you?",
+      "Thanks for reaching out! Yes available. Are you looking for furnished?",
+      "Yes still available, great apartment. When would you like to see it?",
+      "Hello yes available June 1. 3 students sounds perfect, we would love to show you",
+    ];
+    for (let i = 0; i < replyIds.length; i++) {
+      if (!replyIds[i]) continue;
+      const d = new Date(now); d.setDate(d.getDate() - (5 - i)); d.setHours(14, 30);
+      await db.query("INSERT INTO sms_messages (listing_id, direction, body, phone, ab_variant, created_at) VALUES ($1,$2,$3,$4,$5,$6)",
+        [replyIds[i], "inbound", replies[i], "+1212555010" + i, variants[i % 3], d]);
+      inserted.sms++;
+    }
+
+    res.json({ success: true, inserted, listingsUsed: ids.filter(Boolean).length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.listen(PORT, async () => {
