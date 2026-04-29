@@ -66,12 +66,9 @@ async function fetchListings() {
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
     }
   });
-  console.log("Craigslist fetch status:", res.status);
   const html = await res.text();
-
   const items = [];
   const linkPattern = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
   let linkMatch;
@@ -79,8 +76,6 @@ async function fetchListings() {
   while ((linkMatch = linkPattern.exec(html)) !== null) {
     if (!links.includes(linkMatch[1])) links.push(linkMatch[1]);
   }
-  console.log(`Found ${links.length} listing links`);
-
   for (const link of links.slice(0, 50)) {
     const idMatch = link.match(/(\d+)\.html/);
     const id = idMatch ? idMatch[1] : Math.random().toString(36).slice(2);
@@ -88,10 +83,8 @@ async function fetchListings() {
     const linkIndex = html.indexOf(link);
     const surrounding = html.slice(Math.max(0, linkIndex - 200), linkIndex + 200);
     const priceMatch = surrounding.match(/\$[\d,]+/);
-    const price = priceMatch ? priceMatch[0] : "";
-
     items.push({
-      id, title: titleFromUrl, url: link, post: "", price,
+      id, title: titleFromUrl, url: link, post: "", price: priceMatch ? priceMatch[0] : "",
       bedrooms: 2, location: "Manhattan, NY", availableFrom: "",
       datetime: new Date().toISOString(), phoneNumbers: [],
       platform: "Craigslist", address: { city: "New York" },
@@ -107,7 +100,7 @@ async function generateDraft(listing) {
     headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: "claude-sonnet-4-20250514", max_tokens: 1000, system,
-      messages: [{ role: "user", content: `Listing:\nTitle: ${listing.title}\nPrice: ${listing.price}\nLocation: ${listing.location}\nBedrooms: ${listing.bedrooms}\nAvailable: ${listing.availableFrom}\nDescription: ${(listing.post || "").slice(0, 500)}\n\nDraft all 4 message types.` }]
+      messages: [{ role: "user", content: `Title: ${listing.title}\nPrice: ${listing.price}\nLocation: ${listing.location}\n\nDraft all 4 message types.` }]
     }),
   });
   const data = await res.json();
@@ -120,7 +113,7 @@ async function sendSmsAlert(count) {
   await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") },
-    body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new NYC sublet${count > 1 ? "s" : ""} match your criteria. Review: ${process.env.APP_URL || "https://sublet-agent-production.up.railway.app"}` }).toString(),
+    body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new NYC sublet${count > 1 ? "s" : ""} found. Review at: https://sublet-agent-production.up.railway.app` }).toString(),
   });
 }
 
@@ -128,58 +121,111 @@ async function fetchAndProcess() {
   if (isFetching) return 0;
   isFetching = true;
   try {
-    console.log("Fetching listings...");
     const items = await fetchListings();
     const eligible = items.filter(passes);
     const existing = await loadListings();
     const seen = new Set(existing.map(l => l.id));
     const newListings = eligible.filter(l => !seen.has(l.id));
-    console.log(`${newListings.length} new listings out of ${eligible.length} eligible`);
-
+    console.log(`${newListings.length} new listings`);
     for (const listing of newListings) {
-      try { listing.drafts = await generateDraft(listing); }
-      catch (e) { console.error(`Draft failed for ${listing.id}:`, e.message); }
+      try { listing.drafts = await generateDraft(listing); } catch (e) { console.error(`Draft failed:`, e.message); }
       await saveListing(listing);
     }
-
     if (newListings.length > 0) await sendSmsAlert(newListings.length);
     return newListings.length;
   } finally { isFetching = false; }
 }
 
-app.get("/", async (req, res) => {
+// Serve the review app
+app.get("/app", async (req, res) => {
   const listings = await loadListings();
-  res.json({ status: "ok", count: listings.length, fetching: isFetching });
+  res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NYC Sublet Review</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f9f9f7; color: #1a1a1a; padding: 1.5rem 1rem; }
+    .container { max-width: 680px; margin: 0 auto; }
+    h1 { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
+    .subtitle { font-size: 14px; color: #666; margin-bottom: 1.5rem; }
+    .card { background: white; border: 0.5px solid #e0e0e0; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 14px; }
+    .card-title { font-weight: 500; font-size: 15px; text-decoration: none; color: #1a1a1a; display: block; margin-bottom: 4px; }
+    .card-location { font-size: 13px; color: #666; margin-bottom: 8px; }
+    .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+    .badge { font-size: 12px; font-weight: 500; padding: 3px 8px; border-radius: 6px; background: #f1efe8; color: #5f5e5a; }
+    .tabs { display: flex; gap: 4px; border-bottom: 0.5px solid #e0e0e0; padding-bottom: 8px; margin-bottom: 10px; }
+    .tab { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: none; background: transparent; cursor: pointer; color: #666; }
+    .tab.active { background: #f1efe8; color: #1a1a1a; font-weight: 500; }
+    textarea { width: 100%; min-height: 90px; font-size: 13px; line-height: 1.6; resize: vertical; background: #f9f9f7; border: 0.5px solid #e0e0e0; border-radius: 8px; padding: 10px 12px; color: #1a1a1a; font-family: inherit; }
+    .btn { font-size: 13px; padding: 6px 16px; border-radius: 8px; border: 0.5px solid #e0e0e0; cursor: pointer; background: #f1efe8; color: #1a1a1a; margin-top: 10px; margin-right: 8px; }
+    .btn-send { background: #e6f1fb; color: #185fa5; }
+    .btn-sent { background: #eaf3de; color: #3b6d11; }
+    .draft-area { display: none; }
+    .draft-area.active { display: block; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>NYC sublet review</h1>
+  <p class="subtitle">Manhattan · 2–3BR · June–August · ${listings.length} listings</p>
+  ${listings.map(l => `
+  <div class="card" id="card-${l.id}">
+    <a class="card-title" href="${l.url}" target="_blank">${l.title}</a>
+    <div class="card-location">${l.location} ${l.price ? `· ${l.price}/mo` : ""}</div>
+    <div class="badges">
+      <span class="badge">2BR</span>
+      <span class="badge">Craigslist</span>
+    </div>
+    ${l.drafts ? `
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('${l.id}','inApp',this)">In-app</button>
+      <button class="tab" onclick="showTab('${l.id}','email',this)">Email</button>
+      <button class="tab" onclick="showTab('${l.id}','sms',this)">SMS</button>
+      <button class="tab" onclick="showTab('${l.id}','whatsapp',this)">WhatsApp</button>
+    </div>
+    <div id="${l.id}-inApp" class="draft-area active"><textarea>${l.drafts.inApp || ""}</textarea></div>
+    <div id="${l.id}-email" class="draft-area"><textarea>Subject: ${l.drafts.email?.subject || ""}\n\n${l.drafts.email?.body || ""}</textarea></div>
+    <div id="${l.id}-sms" class="draft-area"><textarea>${l.drafts.sms || ""}</textarea></div>
+    <div id="${l.id}-whatsapp" class="draft-area"><textarea>${l.drafts.whatsapp || ""}</textarea></div>
+    <button class="btn btn-sent" onclick="markSent('${l.id}')">Mark as sent</button>
+    <button class="btn" onclick="markSkipped('${l.id}')">Skip</button>
+    ` : `<p style="font-size:13px;color:#666">Drafts generating in background...</p>`}
+  </div>`).join("")}
+</div>
+<script>
+function showTab(id, tab, btn) {
+  document.querySelectorAll('[id^="'+id+'-"]').forEach(el => el.classList.remove('active'));
+  document.getElementById(id+'-'+tab).classList.add('active');
+  btn.closest('.tabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+}
+function markSent(id) {
+  const card = document.getElementById('card-'+id);
+  card.style.opacity = '0.4';
+  card.querySelector('.btn-sent').textContent = 'Sent ✓';
+}
+function markSkipped(id) {
+  document.getElementById('card-'+id).style.opacity = '0.4';
+}
+</script>
+</body>
+</html>`);
 });
 
-app.get("/listings", async (req, res) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.json(await loadListings());
-});
-
+app.get("/", (req, res) => res.redirect("/app"));
+app.get("/listings", async (req, res) => { res.header("Access-Control-Allow-Origin", "*"); res.json(await loadListings()); });
 app.get("/refresh", async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  try {
-    const count = await fetchAndProcess();
-    const listings = await loadListings();
-    res.json({ success: true, newListings: count, total: listings.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
-
 app.post("/refresh", async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  try {
-    const count = await fetchAndProcess();
-    const listings = await loadListings();
-    res.json({ success: true, newListings: count, total: listings.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.options("*", (req, res) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header("Access-Control-Allow-Methods", "GET, POST");
-  res.header("Access-Control-Allow-Headers", "Content-Type");
-  res.sendStatus(200);
+  try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT, async () => {
