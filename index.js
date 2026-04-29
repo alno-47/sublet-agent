@@ -736,7 +736,7 @@ updateStats();
 });
 
 app.listen(PORT, async () => {
-  console.log(\`Sublet agent running on port \${PORT} [DRY_RUN=\${DRY_RUN}]\`);
+  console.log(`Sublet agent running on port ${PORT} [DRY_RUN=${DRY_RUN}]`);
   await initDb();
   fetchAndProcess().catch(console.error);
   setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
