@@ -39,11 +39,6 @@ function timeAgo(date) {
   return Math.floor(s / 86400) + "d ago";
 }
 
-function getText(html, tag) {
-  const m = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
-  return m ? m[1].replace(/<[^>]+>/g, "").trim() : "";
-}
-
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function fetchListingDetail(url, idx) {
@@ -59,46 +54,31 @@ async function fetchListingDetail(url, idx) {
     });
     if (!res.ok) return null;
     const html = await res.text();
-
     const titleMatch = html.match(/<span\s+id="titletextonly"[^>]*>([\s\S]*?)<\/span>/i) ||
                        html.match(/<h1[^>]*class="[^"]*postingtitle[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
     const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "";
-
     const priceMatch = html.match(/class="[^"]*price[^"]*"[^>]*>\s*(\$[\d,]+)/i) ||
                        html.match(/(\$[\d,]+)\s*(?:\/mo|per month)?/i);
     const price = priceMatch ? priceMatch[1] : "";
-
     const bodyMatch = html.match(/<section\s+id="postingbody"[^>]*>([\s\S]*?)<\/section>/i);
     const post = bodyMatch ? bodyMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 800) : "";
-
     const brMatch = (title + " " + post).match(/(\d)\s*b(?:r|ed(?:room)?s?)/i);
     const bedrooms = brMatch ? parseInt(brMatch[1]) : 2;
-
     const locMatch = html.match(/class="[^"]*mapaddress[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i) ||
                      html.match(/<small[^>]*>\(([^)]+)\)<\/small>/i);
     const location = locMatch ? locMatch[1].replace(/<[^>]+>/g, "").trim() : "Manhattan, NY";
-
     const availMatch = post.match(/avail(?:able)?(?:\s+(?:starting|from|on|beginning))?\s+([a-z]+\s+\d+|\d+\/\d+)/i) ||
                        html.match(/available\s+([a-z]+ \d+)/i);
     const availableFrom = availMatch ? "available " + availMatch[1].toLowerCase() : "";
-
     const phoneMatches = html.match(/\+?1?\s*[-.]?\s*\(?\d{3}\)?\s*[-.]?\s*\d{3}\s*[-.]?\s*\d{4}/g) || [];
     const phoneNumbers = [...new Set(phoneMatches)].slice(0, 2);
-
     const amenities = [];
     const amenityMap = { laundry: "laundry", parking: "parking", cats_ok: "cats OK", dogs_ok: "dogs OK", is_furnished: "furnished", air_conditioning: "A/C", no_smoking: "no smoking" };
-    for (const [k, v] of Object.entries(amenityMap)) {
-      if (html.includes(k)) amenities.push(v);
-    }
-
+    for (const [k, v] of Object.entries(amenityMap)) { if (html.includes(k)) amenities.push(v); }
     const imgMatches = html.matchAll(/https:\/\/images\.craigslist\.org\/[^"'\s]+_600x450\.jpg/g);
     const pics = [...new Set([...imgMatches].map(m => m[0]))].slice(0, 3);
-
     return { title, price, post, bedrooms, location, availableFrom, phoneNumbers, amenities, pics };
-  } catch (e) {
-    console.error(`Failed to fetch ${url}:`, e.message);
-    return null;
-  }
+  } catch (e) { console.error(`Failed to fetch ${url}:`, e.message); return null; }
 }
 
 async function initDb() {
@@ -176,7 +156,6 @@ async function fetchListings() {
   let m; const links = [];
   while ((m = pat.exec(html)) !== null) { if (!links.includes(m[1])) links.push(m[1]); }
   console.log(`Found ${links.length} listing links, fetching details for up to 20...`);
-
   const items = [];
   for (let i = 0; i < Math.min(links.length, 20); i++) {
     const link = links[i];
@@ -184,21 +163,9 @@ async function fetchListings() {
     console.log(`Fetching listing ${i + 1}/20: ${id}`);
     const detail = await fetchListingDetail(link, i);
     if (detail && detail.title) {
-      items.push({
-        id, title: detail.title, url: link, post: detail.post, price: detail.price,
-        bedrooms: detail.bedrooms, location: detail.location || "Manhattan, NY",
-        availableFrom: detail.availableFrom, datetime: new Date().toISOString(),
-        phoneNumbers: detail.phoneNumbers || [], amenities: detail.amenities || [],
-        platform: "Craigslist", address: { city: "New York" },
-        pics: detail.pics?.length ? detail.pics : [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]],
-      });
+      items.push({ id, title: detail.title, url: link, post: detail.post, price: detail.price, bedrooms: detail.bedrooms, location: detail.location || "Manhattan, NY", availableFrom: detail.availableFrom, datetime: new Date().toISOString(), phoneNumbers: detail.phoneNumbers || [], amenities: detail.amenities || [], platform: "Craigslist", address: { city: "New York" }, pics: detail.pics?.length ? detail.pics : [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] });
     } else {
-      items.push({
-        id, title: "Manhattan Sublet", url: link, post: "", price: "", bedrooms: 2,
-        location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(),
-        phoneNumbers: [], amenities: [], platform: "Craigslist", address: { city: "New York" },
-        pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]],
-      });
+      items.push({ id, title: "Manhattan Sublet", url: link, post: "", price: "", bedrooms: 2, location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(), phoneNumbers: [], amenities: [], platform: "Craigslist", address: { city: "New York" }, pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] });
     }
   }
   console.log(`Successfully fetched details for ${items.length} listings`);
@@ -206,20 +173,24 @@ async function fetchListings() {
 }
 
 async function generateDraftAndScore(l) {
-  const system = `You help three HBS students (Alex, Julian, Nora from Germany/Austria) find a 2-3BR Manhattan sublet for June–August 2026. Return ONLY valid JSON: {"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence"}.
+  const system = `You help three HBS students (Alex from Germany, Julian from Germany, Nora from Austria) find a 2-3BR Manhattan sublet for June-August 2026. Return ONLY valid JSON with these exact fields:
+{"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence","availableFrom":"june"}
 
-inApp: Short casual Craigslist internal message, 3-4 sentences. Say they're 3 HBS students looking for a summer sublet June–August 2026, ask if still available and about the price. Sign off "— Alex, Julian & Nora". No "Dear/Hi", just get to the point.
+inApp: Short casual Craigslist internal message, 3-4 sentences. Say they are 3 HBS students looking for a summer sublet June-August 2026, ask if still available and about the price. Sign off "- Alex, Julian & Nora". No Dear/Hi, just get to the point.
 
-email: Professional but warm. Subject line should mention dates and bedroom count. Body introduces all three as HBS MBA students, mentions they are responsible international students, confirms exact dates (June 1 – Aug 31), asks about availability, price, and viewing. Sign off "Alex, Julian & Nora".
+email: Professional but warm. Subject line should mention dates and bedroom count. Body introduces all three as HBS MBA students, mentions they are responsible international students, confirms exact dates (June 1 - Aug 31), asks about availability, price, and viewing. Sign off "Alex, Julian & Nora".
 
 sms: Max 2 sentences. Just: who they are, what they want, the dates. No sign-off needed.
 
-whatsapp: Casual and friendly, 3-5 sentences. Similar to inApp but slightly warmer, can use an emoji or two. Sign off "Alex, Julian & Nora 🙂".
+whatsapp: Casual and friendly, 3-5 sentences. Similar to inApp but slightly warmer, can use an emoji or two. Sign off "Alex, Julian & Nora".
 
-Score 1-10 strictly on price ($4-8k/mo), location, June availability, furnished status.`;
+score: 1-10 strictly on price ($4-8k/mo ideal), Manhattan location, June availability, furnished status.
+
+availableFrom: Extract the availability month from the listing as a lowercase string - one of: "may", "june", "july", "august", "september", or "unknown". Use the description to infer this even if not explicitly stated.`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST", headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system, messages: [{ role: "user", content: `Title: ${l.title}\nPrice: ${l.price}\nLocation: ${l.location}\nBedrooms: ${l.bedrooms}\nAvailable: ${l.availableFrom}\nDescription: ${(l.post || "").slice(0, 400)}\nAmenities: ${(l.amenities || []).join(", ")}` }] })
   });
   const data = await res.json();
@@ -239,125 +210,32 @@ async function sendAlertToMe(count) {
 
 async function sendDailySummaryEmail() {
   if (!SENDGRID_API_KEY) { console.log("No SendGrid key, skipping daily summary"); return; }
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
+  const today = new Date(); today.setHours(0, 0, 0, 0);
   const listings = await loadListings();
   const actions = await loadActions();
-
   const todayListings = listings.filter(l => new Date(l.datetime) >= today);
   const todayContacted = actions.filter(a => a.action === "contacted" && new Date(a.created_at) >= today);
   const todayReplies = actions.filter(a => a.action === "reply" && new Date(a.created_at) >= today);
   const todayViewings = actions.filter(a => a.action === "viewing" && new Date(a.created_at) >= today);
   const totalContacted = actions.filter(a => a.action === "contacted");
   const totalReplies = actions.filter(a => a.action === "reply");
-
   const prices = todayListings.map(l => { const m = (l.price || "").replace(/,/g, "").match(/\d+/); return m ? parseInt(m[0]) : 0; }).filter(p => p > 0);
   const avgPrice = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
-
-  const top3 = listings
-    .filter(l => l.score && new Date(l.datetime) >= today)
-    .sort((a, b) => (b.score || 0) - (a.score || 0))
-    .slice(0, 3);
-
+  const top3 = listings.filter(l => l.score && new Date(l.datetime) >= today).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3);
   const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-
-  const topListingsHtml = top3.length ? top3.map((l, i) => `
-    <tr>
-      <td style="padding:10px;border-bottom:1px solid #f0f0f0">
-        <strong style="color:#18181b">${i + 1}. ${(l.title || "Manhattan Sublet").slice(0, 50)}</strong><br>
-        <span style="color:#71717a;font-size:13px">${l.location || "Manhattan"} · ${l.price || "price TBD"} · Score: ${l.score}/10</span><br>
-        <span style="color:#a1a1aa;font-size:12px;font-style:italic">${l.scoreReason || ""}</span><br>
-        <a href="${l.url}" style="color:#0070f3;font-size:13px;text-decoration:none">View listing →</a>
-      </td>
-    </tr>`).join("") : `<tr><td style="padding:10px;color:#71717a">No new scored listings today.</td></tr>`;
-
-  const html = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;margin:0;padding:24px">
-  <div style="max-width:560px;margin:0 auto">
-    <div style="background:#0070f3;border-radius:12px 12px 0 0;padding:24px 28px;color:white">
-      <div style="font-size:24px;margin-bottom:4px">🤝 NYC Sublet Finder</div>
-      <div style="font-size:14px;opacity:0.85">Daily Summary · ${dateStr}</div>
-    </div>
-    <div style="background:white;padding:24px 28px;border-left:1px solid #e4e4e7;border-right:1px solid #e4e4e7">
-      <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
-        <tr>
-          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
-            <div style="font-size:26px;font-weight:700;color:#0070f3">${todayListings.length}</div>
-            <div style="font-size:12px;color:#71717a;margin-top:2px">New today</div>
-          </td>
-          <td style="width:4%"></td>
-          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
-            <div style="font-size:26px;font-weight:700;color:#00a651">${todayContacted.length}</div>
-            <div style="font-size:12px;color:#71717a;margin-top:2px">Contacted</div>
-          </td>
-          <td style="width:4%"></td>
-          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
-            <div style="font-size:26px;font-weight:700;color:#7c3aed">${todayReplies.length}</div>
-            <div style="font-size:12px;color:#71717a;margin-top:2px">Replies</div>
-          </td>
-          <td style="width:4%"></td>
-          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
-            <div style="font-size:26px;font-weight:700;color:#f59e0b">${todayViewings.length}</div>
-            <div style="font-size:12px;color:#71717a;margin-top:2px">Viewings</div>
-          </td>
-        </tr>
-      </table>
-
-      ${avgPrice ? `<div style="background:#e8f2ff;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:14px;color:#0051a8">
-        Average listing price today: <strong>$${avgPrice.toLocaleString()}/mo</strong>
-      </div>` : ""}
-
-      <div style="margin-bottom:8px;font-size:11px;font-weight:700;color:#a1a1aa;text-transform:uppercase;letter-spacing:0.8px">Top listings today</div>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
-        ${topListingsHtml}
-      </table>
-
-      <div style="background:#f4f4f5;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#71717a">
-        <strong style="color:#18181b">All time:</strong> ${listings.length} listings found · ${totalContacted.length} contacted · ${totalReplies.length} replies received
-      </div>
-
-      <a href="https://sublet-agent-production.up.railway.app" style="display:block;background:#0070f3;color:white;text-align:center;padding:12px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">
-        Open NYC Sublet Finder →
-      </a>
-    </div>
-    <div style="background:#f4f4f5;border-radius:0 0 12px 12px;padding:14px 28px;border:1px solid #e4e4e7;border-top:none;font-size:12px;color:#a1a1aa;text-align:center">
-      Sent automatically every evening · Manhattan · June–August 2026
-    </div>
-  </div>
-</body>
-</html>`;
-
-  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${SENDGRID_API_KEY}` },
-    body: JSON.stringify({
-      personalizations: [{ to: [{ email: SUMMARY_EMAIL }] }],
-      from: { email: "noreply@subletfinder.app", name: "NYC Sublet Finder" },
-      subject: `Sublet Daily Summary · ${todayListings.length} new listings · ${dateStr}`,
-      content: [{ type: "text/html", value: html }]
-    })
-  });
-
+  const topListingsHtml = top3.length ? top3.map((l, i) => `<tr><td style="padding:10px;border-bottom:1px solid #f0f0f0"><strong style="color:#18181b">${i + 1}. ${(l.title || "Manhattan Sublet").slice(0, 50)}</strong><br><span style="color:#71717a;font-size:13px">${l.location || "Manhattan"} · ${l.price || "price TBD"} · Score: ${l.score}/10</span><br><span style="color:#a1a1aa;font-size:12px;font-style:italic">${l.scoreReason || ""}</span><br><a href="${l.url}" style="color:#0070f3;font-size:13px;text-decoration:none">View listing</a></td></tr>`).join("") : `<tr><td style="padding:10px;color:#71717a">No new scored listings today.</td></tr>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;margin:0;padding:24px"><div style="max-width:560px;margin:0 auto"><div style="background:#0070f3;border-radius:12px 12px 0 0;padding:24px 28px;color:white"><div style="font-size:20px;font-weight:700;margin-bottom:4px">Summer Sublet Agent</div><div style="font-size:14px;opacity:0.85">Daily Summary - ${dateStr}</div></div><div style="background:white;padding:24px 28px;border-left:1px solid #e4e4e7;border-right:1px solid #e4e4e7"><table style="width:100%;border-collapse:collapse;margin-bottom:24px"><tr><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#0070f3">${todayListings.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">New today</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#00a651">${todayContacted.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Contacted</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#7c3aed">${todayReplies.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Replies</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#f59e0b">${todayViewings.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Viewings</div></td></tr></table>${avgPrice ? `<div style="background:#e8f2ff;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:14px;color:#0051a8">Average listing price today: <strong>$${avgPrice.toLocaleString()}/mo</strong></div>` : ""}<div style="margin-bottom:8px;font-size:11px;font-weight:700;color:#a1a1aa;text-transform:uppercase;letter-spacing:0.8px">Top listings today</div><table style="width:100%;border-collapse:collapse;margin-bottom:24px">${topListingsHtml}</table><div style="background:#f4f4f5;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#71717a"><strong style="color:#18181b">All time:</strong> ${listings.length} listings found - ${totalContacted.length} contacted - ${totalReplies.length} replies received</div><a href="https://sublet-agent-production.up.railway.app" style="display:block;background:#0070f3;color:white;text-align:center;padding:12px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">Open Summer Sublet Agent</a></div><div style="background:#f4f4f5;border-radius:0 0 12px 12px;padding:14px 28px;border:1px solid #e4e4e7;border-top:none;font-size:12px;color:#a1a1aa;text-align:center">Sent automatically every evening - Manhattan - June-August 2026</div></div></body></html>`;
+  const res = await fetch("https://api.sendgrid.com/v3/mail/send", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SENDGRID_API_KEY}` }, body: JSON.stringify({ personalizations: [{ to: [{ email: SUMMARY_EMAIL }] }], from: { email: "noreply@subletfinder.app", name: "Summer Sublet Agent" }, subject: `Sublet Daily Summary - ${todayListings.length} new listings - ${dateStr}`, content: [{ type: "text/html", value: html }] }) });
   if (res.ok) console.log("Daily summary email sent to", SUMMARY_EMAIL);
   else { const err = await res.text(); console.error("SendGrid error:", err); }
 }
 
 function scheduleDailySummary() {
-  const now = new Date();
-  const next7pm = new Date();
-  next7pm.setHours(19, 0, 0, 0);
+  const now = new Date(); const next7pm = new Date(); next7pm.setHours(19, 0, 0, 0);
   if (now >= next7pm) next7pm.setDate(next7pm.getDate() + 1);
   const msUntil = next7pm - now;
   console.log(`Daily summary scheduled in ${Math.round(msUntil / 60000)} minutes`);
-  setTimeout(() => {
-    sendDailySummaryEmail().catch(console.error);
-    setInterval(() => sendDailySummaryEmail().catch(console.error), 24 * 60 * 60 * 1000);
-  }, msUntil);
+  setTimeout(() => { sendDailySummaryEmail().catch(console.error); setInterval(() => sendDailySummaryEmail().catch(console.error), 24 * 60 * 60 * 1000); }, msUntil);
 }
 
 async function fetchAndProcess() {
@@ -371,7 +249,13 @@ async function fetchAndProcess() {
     const newListings = eligible.filter(l => !seen.has(l.id));
     console.log(`${newListings.length} new listings after filtering`);
     for (const l of newListings) {
-      try { const r = await generateDraftAndScore(l); l.drafts = { inApp: r.inApp, email: r.email, sms: r.sms, whatsapp: r.whatsapp }; l.score = r.score; l.scoreReason = r.scoreReason; } catch (e) { console.error("Draft failed:", e.message); }
+      try {
+        const r = await generateDraftAndScore(l);
+        l.drafts = { inApp: r.inApp, email: r.email, sms: r.sms, whatsapp: r.whatsapp };
+        l.score = r.score;
+        l.scoreReason = r.scoreReason;
+        if (r.availableFrom && r.availableFrom !== "unknown") l.availableFrom = r.availableFrom;
+      } catch (e) { console.error("Draft failed:", e.message); }
       if (l.phoneNumbers?.length > 0 && l.drafts) { const r = await sendSms(l.phoneNumbers[0], l.drafts.sms); l.smsSent = !r?.dryRun; l.smsDryRun = r?.dryRun || false; } else { l.needsManualSend = true; }
       await saveListing(l);
     }
@@ -382,24 +266,17 @@ async function fetchAndProcess() {
   } finally { isFetching = false; }
 }
 
-// New endpoint: send SMS on demand from the UI
 app.post("/send-sms", async (req, res) => {
   const { listingId, userName } = req.body;
   if (!listingId || !userName) return res.status(400).json({ error: "Missing listingId or userName" });
   const listings = await loadListings();
   const l = listings.find(x => x.id === listingId);
   if (!l) return res.status(404).json({ error: "Listing not found" });
-  if (!l.phoneNumbers?.length) return res.status(400).json({ error: "No phone number available for this listing" });
+  if (!l.phoneNumbers?.length) return res.status(400).json({ error: "No phone number available" });
   if (!l.drafts?.sms) return res.status(400).json({ error: "No SMS draft available" });
   const result = await sendSms(l.phoneNumbers[0], l.drafts.sms);
-  if (result.dryRun) {
-    await saveAction(listingId, userName, "contacted");
-    return res.json({ success: true, dryRun: true });
-  }
-  if (result.sid) {
-    await saveAction(listingId, userName, "contacted");
-    return res.json({ success: true, sid: result.sid });
-  }
+  if (result.dryRun) { await saveAction(listingId, userName, "contacted"); return res.json({ success: true, dryRun: true }); }
+  if (result.sid) { await saveAction(listingId, userName, "contacted"); return res.json({ success: true, sid: result.sid }); }
   return res.status(500).json({ error: result.message || "SMS failed" });
 });
 
@@ -418,14 +295,17 @@ app.get("/", async (req, res) => {
   const avgPrice = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
   const maxPrice = Math.max(...prices, 10000);
   const lastUpdated = lastFetchTime ? timeAgo(lastFetchTime) : "never";
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const todayCount = listings.filter(l => new Date(l.datetime) >= today).length;
+  const LOGO_SVG = `<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="36" rx="8" fill="#0070f3"/><path d="M18 8L30 18H27V28H9V18H6L18 8Z" fill="white"/><rect x="14" y="20" width="8" height="8" rx="1.5" fill="#0070f3"/></svg>`;
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NYC Sublet Finder</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤝</text></svg>">
+<title>Summer Sublet Agent</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 36 36'><rect width='36' height='36' rx='8' fill='%230070f3'/><path d='M18 8L30 18H27V28H9V18H6L18 8Z' fill='white'/><rect x='14' y='20' width='8' height='8' rx='1.5' fill='%230070f3'/></svg>">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -447,7 +327,7 @@ app.get("/", async (req, res) => {
 body{font-family:'Inter',sans-serif;background:var(--gray-50);color:var(--gray-900);min-height:100vh;font-size:14px;line-height:1.5}
 nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;box-shadow:var(--sh-sm)}
 .nav-brand{display:flex;align-items:center;gap:10px}
-.nav-logo{font-size:24px;line-height:1}
+.nav-logo{display:flex;align-items:center;flex-shrink:0}
 .nav-title{font-size:15px;font-weight:700;letter-spacing:-0.3px}
 .nav-sub{font-size:12px;color:var(--gray-400);margin-top:1px}
 .user-wrap{position:relative}
@@ -471,11 +351,14 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .hero-left p{font-size:14px;opacity:0.85;max-width:520px;line-height:1.6}
 .hero-pills{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 .hero-pill{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:500}
-.hero-right{text-align:right}
+.hero-right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.hero-stats{display:flex;gap:20px;align-items:center}
+.hero-stat-block{text-align:center}
 .hero-stat{font-size:32px;font-weight:800;line-height:1}
 .hero-stat-lbl{font-size:12px;opacity:0.75;margin-top:2px}
-.last-updated{font-size:11px;opacity:0.6;margin-top:6px}
-.layout{display:grid;grid-template-columns:272px 1fr;min-height:calc(100vh - 60px - 130px)}
+.hero-stat-divider{width:1px;height:48px;background:rgba(255,255,255,0.25)}
+.last-updated{font-size:11px;opacity:0.6}
+.layout{display:grid;grid-template-columns:272px 1fr;min-height:calc(100vh - 60px - 160px)}
 .sidebar{background:var(--white);border-right:1px solid var(--gray-200);padding:20px 18px;position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto}
 .sb-section{margin-bottom:22px}
 .sb-label{font-size:11px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px}
@@ -508,13 +391,13 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .refresh-btn{height:32px;padding:0 12px;border-radius:var(--r-sm);border:1px solid var(--gray-200);background:var(--white);cursor:pointer;font-size:12px;font-family:'Inter',sans-serif;color:var(--gray-500);display:flex;align-items:center;gap:5px;transition:all 0.12s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
 .skeleton-list{display:flex;flex-direction:column;gap:12px}
-.skeleton-card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;display:grid;grid-template-columns:220px 1fr;min-height:165px}
+.skeleton-card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;display:grid;grid-template-columns:200px 1fr;height:160px}
 .skeleton-img{background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-200) 50%,var(--gray-100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite}
 .skeleton-body{padding:16px;display:flex;flex-direction:column;gap:10px;justify-content:center}
 .skeleton-line{height:12px;background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-200) 50%,var(--gray-100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px}
 .skeleton-line.wide{width:75%}.skeleton-line.medium{width:50%}.skeleton-line.short{width:35%}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;margin-bottom:10px;cursor:pointer;transition:box-shadow 0.2s,border-color 0.2s;display:grid;grid-template-columns:220px 1fr;min-height:165px;border-left-width:4px}
+.card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;margin-bottom:10px;cursor:pointer;transition:box-shadow 0.2s,border-color 0.2s;display:grid;grid-template-columns:200px 1fr;height:160px;border-left-width:4px}
 .card:hover{box-shadow:var(--sh-lg);border-color:var(--gray-300)}
 .card.score-border-high{border-left-color:var(--green)}
 .card.score-border-mid{border-left-color:var(--amber)}
@@ -523,7 +406,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .card.is-new{box-shadow:0 0 0 2px rgba(0,112,243,0.15),var(--sh)}
 .card.status-skipped{opacity:0.4}
 .card.focused{box-shadow:0 0 0 3px rgba(0,112,243,0.3),var(--sh-lg)}
-.card-img-wrap{position:relative;overflow:hidden}
+.card-img-wrap{position:relative;overflow:hidden;height:160px}
 .card-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.3s}
 .card:hover .card-img{transform:scale(1.04)}
 .card-img-ph{width:100%;height:100%;background:linear-gradient(135deg,var(--gray-100),var(--gray-200));display:flex;align-items:center;justify-content:center;color:var(--gray-400);font-size:12px}
@@ -533,21 +416,21 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .sf-mid{background:rgba(245,158,11,0.92);color:white}
 .sf-low{background:rgba(229,62,62,0.92);color:white}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.7}}
-.card-body{padding:14px 16px;display:flex;flex-direction:column;justify-content:space-between;gap:5px}
+.card-body{padding:14px 16px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
 .card-row1{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
-.card-title{font-size:13px;font-weight:600;color:var(--gray-900);line-height:1.3;flex:1}
+.card-title{font-size:13px;font-weight:600;color:var(--gray-900);line-height:1.3;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-price-wrap{text-align:right;flex-shrink:0}
 .card-price{font-size:15px;font-weight:700}
 .card-price-diff{font-size:11px;font-weight:500;margin-top:1px}
 .price-below{color:var(--green)}.price-above{color:var(--red)}.price-avg{color:var(--gray-400)}
 .card-meta{font-size:12px;color:var(--gray-400);display:flex;gap:8px;flex-wrap:wrap}
-.card-score-reason{font-size:11px;color:var(--gray-400);font-style:italic;line-height:1.4}
+.card-score-reason{font-size:11px;color:var(--gray-400);font-style:italic;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .avail-bar{margin:2px 0}
 .avail-label{font-size:10px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;display:flex;justify-content:space-between}
 .avail-track{height:5px;background:var(--gray-100);border-radius:3px;position:relative;overflow:hidden}
 .avail-target{position:absolute;top:-1px;height:7px;border-radius:3px;background:rgba(0,112,243,0.18);border:1px solid var(--blue)}
-.avail-range{position:absolute;top:0;height:100%;border-radius:3px;background:var(--gray-300)}
-.avail-overlap{position:absolute;top:0;height:100%;border-radius:3px;background:var(--green)}
+.avail-fill{position:absolute;top:0;height:100%;border-radius:3px}
+.af-green{background:var(--green)}.af-amber{background:var(--amber)}.af-gray{background:var(--gray-300)}
 .card-bottom{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .tag{font-size:11px;font-weight:500;padding:2px 7px;border-radius:20px}
@@ -615,12 +498,11 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .drawer-handle{width:40px;height:4px;background:var(--gray-300);border-radius:2px;margin:0 auto 20px}
 .drawer-title{font-size:15px;font-weight:600;margin-bottom:16px}
 .drawer-section{margin-bottom:20px}
-.empty{text-align:center;padding:80px 20px;color:var(--gray-400)}
-.empty h3{font-size:18px;color:var(--gray-700);margin-bottom:8px}
 @media(max-width:768px){
   .layout{grid-template-columns:1fr}
   .sidebar{display:none}
-  .card{grid-template-columns:120px 1fr;min-height:120px}
+  .card{grid-template-columns:120px 1fr;height:140px}
+  .card-img-wrap{height:140px}
   .panel{width:100vw}
   nav{padding:0 16px}
   nav .nav-sub{display:none}
@@ -633,10 +515,10 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 <body>
 <nav>
   <div class="nav-brand">
-    <div class="nav-logo">🤝</div>
-    <div>
-      <div class="nav-title">NYC Sublet Finder</div>
-      <div class="nav-sub">Alex · Julian · Nora · Manhattan · June–Aug 2026</div>
+    <div class="nav-logo">${LOGO_SVG}</div>
+    <div style="margin-left:2px">
+      <div class="nav-title">Summer Sublet Agent</div>
+      <div class="nav-sub">Target: Manhattan, June–Aug 2026</div>
     </div>
   </div>
   <div class="user-wrap" id="uwrap">
@@ -647,8 +529,8 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     </button>
     <div class="user-menu" id="umenu">
       <button class="uopt" onclick="setUser('Alex','A','')"><div class="uav">A</div><div><div>Alex</div><div class="uopt-sub">HBS · Germany</div></div></button>
-      <button class="uopt" onclick="setUser('Julian','J','j')"><div class="uav j">J</div><div><div>Julian</div><div class="uopt-sub">HBS · Austria</div></div></button>
-      <button class="uopt" onclick="setUser('Nora','N','n')"><div class="uav n">N</div><div><div>Nora</div><div class="uopt-sub">HBS · Germany</div></div></button>
+      <button class="uopt" onclick="setUser('Julian','J','j')"><div class="uav j">J</div><div><div>Julian</div><div class="uopt-sub">HBS · Germany</div></div></button>
+      <button class="uopt" onclick="setUser('Nora','N','n')"><div class="uav n">N</div><div><div>Nora</div><div class="uopt-sub">HBS · Austria</div></div></button>
       <div class="udiv"></div>
       <button class="uopt" onclick="setUser('Marco','M','m')"><div class="uav m">M</div><div><div>Marco</div><div class="uopt-sub">For review only</div></div></button>
     </div>
@@ -659,18 +541,27 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="hero-inner">
     <div class="hero-left">
       <h2>Manhattan Sublet Search · Summer 2026</h2>
-      <p>AI-powered apartment finder that automatically scans Craigslist, scores listings by fit, and drafts personalized outreach messages for Alex, Julian, and Nora.</p>
+      <p>AI-powered apartment finder that automatically scans Craigslist, scores listings by fit, drafts and sends personalized outreach via SMS, and delivers a daily email summary.</p>
       <div class="hero-pills">
         <span class="hero-pill">🤖 Auto-scraped every 30 min</span>
         <span class="hero-pill">✍️ AI-drafted messages</span>
-        <span class="hero-pill">📊 Match scoring</span>
+        <span class="hero-pill">📱 Auto SMS outreach</span>
         <span class="hero-pill">👥 Shared team workspace</span>
         <span class="hero-pill">📧 Daily email summary</span>
       </div>
     </div>
     <div class="hero-right">
-      <div class="hero-stat">${listings.length}</div>
-      <div class="hero-stat-lbl">listings found</div>
+      <div class="hero-stats">
+        <div class="hero-stat-block">
+          <div class="hero-stat">${listings.length}</div>
+          <div class="hero-stat-lbl">total listings</div>
+        </div>
+        <div class="hero-stat-divider"></div>
+        <div class="hero-stat-block">
+          <div class="hero-stat">${todayCount}</div>
+          <div class="hero-stat-lbl">found today</div>
+        </div>
+      </div>
       <div class="last-updated">Last updated: ${lastUpdated}</div>
     </div>
   </div>
@@ -731,7 +622,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       <div class="sb-label">Keyboard shortcuts</div>
       <div class="kb-hint">
         <span class="kb-key">↑↓</span> Navigate · <span class="kb-key">Enter</span> Open<br>
-        <span class="kb-key">Esc</span> Close · <span class="kb-key">C</span> Contact · <span class="kb-key">P</span> Pass
+        <span class="kb-key">Esc</span> Close · <span class="kb-key">C</span> Send SMS · <span class="kb-key">P</span> Pass
       </div>
     </div>
   </aside>
@@ -764,14 +655,12 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
         else if (diff > 5) priceDiff = `<div class="card-price-diff price-above">↑ ${Math.abs(diff)}% above avg</div>`;
         else priceDiff = `<div class="card-price-diff price-avg">≈ avg price</div>`;
       }
-      const monthMap = {jan:0,feb:1,mar:2,apr:3,may:4,jun:5,jul:6,aug:7,sep:8};
+      const monthMap = { may: 0, june: 25, july: 50, august: 75 };
       const avStr = (l.availableFrom || "").toLowerCase();
-      let avStart = -1;
-      for (const [mon, mi] of Object.entries(monthMap)) { if (avStr.includes(mon)) { avStart = (mi - 5) / 3 * 100; break; } }
-      const avEnd = avStart >= 0 ? Math.min(avStart + 60, 100) : -1;
-      const overlapStart = avStart >= 0 ? Math.max(avStart, 0) : -1;
-      const overlapEnd = avStart >= 0 ? Math.min(avEnd, 100) : -1;
-      const availBarHtml = `<div class="avail-bar"><div class="avail-label"><span>Jun</span><span>Jul</span><span>Aug</span></div><div class="avail-track"><div class="avail-target" style="left:0%;width:100%"></div>${avStart >= 0 ? `<div class="avail-range" style="left:${Math.max(0,avStart)}%;width:${Math.min(100-Math.max(0,avStart),60)}%"></div>` : ""}${overlapStart >= 0 && overlapEnd > overlapStart ? `<div class="avail-overlap" style="left:${overlapStart}%;width:${overlapEnd - overlapStart}%"></div>` : ""}</div></div>`;
+      let avPos = -1;
+      for (const [mon, pos] of Object.entries(monthMap)) { if (avStr.includes(mon)) { avPos = pos; break; } }
+      const avFillClass = avPos === 0 || avPos === 25 ? "af-green" : avPos === 50 ? "af-amber" : "af-gray";
+      const availBarHtml = `<div class="avail-bar"><div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div><div class="avail-track"><div class="avail-target" style="left:25%;width:50%"></div>${avPos >= 0 ? `<div class="avail-fill ${avFillClass}" style="left:${avPos}%;width:25%"></div>` : ""}</div></div>`;
 
       return `
 <div class="card score-border-${sc} ${isNew ? "is-new" : ""} status-${status}"
@@ -893,21 +782,17 @@ function openPanel(id){
   const avCls=n=>n==="Julian"?"j":n==="Nora"?"n":n==="Marco"?"m":"";
   const pm=(l.price||"").replace(/,/g,"").match(/\\d+/);const price=pm?parseInt(pm[0]):0;
   let pdiff="";if(price>0&&avgPrice>0){const d=Math.round((price-avgPrice)/avgPrice*100);if(d<-5)pdiff=\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(d)}% below avg</span>\`;else if(d>5)pdiff=\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(d)}% above avg</span>\`;}
-  document.getElementById("panel").dataset.listingId=id;
 
-  // Build outreach action buttons
-  let actionBtns = "";
-  if (!ca) {
-    if (hasPhone && l.drafts?.sms) {
-      actionBtns += \`<button class="abtn btn-sms" id="sms-btn-\${l.id}" onclick="doSendSms('\${l.id}')">📱 Send SMS</button>\`;
-    } else {
-      actionBtns += \`<button class="abtn btn-sms" onclick="doAction('\${l.id}','contacted')" title="\${!hasPhone?'No phone number available':''}"\${!hasPhone?' disabled':''}>✓ \${hasPhone?'Contacted':'No phone #'}</button>\`;
-    }
+  let actionBtns="";
+  if(!ca){
+    if(hasPhone&&l.drafts?.sms){actionBtns+=\`<button class="abtn btn-sms" id="sms-btn-\${l.id}" onclick="doSendSms('\${l.id}')">📱 Send SMS</button>\`;}
+    else{actionBtns+=\`<button class="abtn btn-sms" \${!hasPhone?"disabled":""} title="\${!hasPhone?"No phone number available":""}">✓ \${hasPhone?"Contacted":"No phone #"}</button>\`;}
   }
-  if (ca && !ra) actionBtns += \`<button class="abtn btn-r" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`;
-  if ((ca||ra) && !va) actionBtns += \`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`;
-  if (!pa) actionBtns += \`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`;
+  if(ca&&!ra)actionBtns+=\`<button class="abtn btn-r" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`;
+  if((ca||ra)&&!va)actionBtns+=\`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`;
+  if(!pa)actionBtns+=\`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`;
 
+  document.getElementById("panel").dataset.listingId=id;
   document.getElementById("panel-content").innerHTML=\`
     <div class="ph"><div style="flex:1;min-width:0">
       <div class="ptitle">\${(l.title||"Manhattan Sublet").replace(/</g,"&lt;")}</div>
@@ -939,27 +824,17 @@ function openPanel(id){
 function closePanel(){document.getElementById("overlay").classList.remove("open");document.getElementById("panel").classList.remove("open");document.body.style.overflow="";panelOpen=false;}
 function showDraft(tab,btn){document.querySelectorAll(".dpane").forEach(p=>p.classList.remove("active"));document.getElementById("dp-"+tab).classList.add("active");document.querySelectorAll(".dtab").forEach(t=>t.classList.remove("active"));btn.classList.add("active");}
 function copyDraft(btn){navigator.clipboard.writeText(btn.previousElementSibling.value).then(()=>{btn.textContent="Copied!";setTimeout(()=>btn.textContent="Copy",1500);});}
-
-async function doSendSms(lid) {
-  if (!currentUser) { alert("Select your name from the dropdown first."); return; }
-  const btn = document.getElementById("sms-btn-" + lid);
-  if (btn) { btn.disabled = true; btn.textContent = "Sending..."; }
-  try {
-    const res = await fetch("/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ listingId: lid, userName: currentUser }) });
-    const data = await res.json();
-    if (data.success) {
-      if (btn) { btn.textContent = "✓ SMS Sent!"; btn.className = "abtn btn-sms-sent"; }
-      setTimeout(() => location.reload(), 1200);
-    } else {
-      if (btn) { btn.disabled = false; btn.textContent = "📱 Send SMS"; }
-      alert("SMS failed: " + (data.error || "Unknown error"));
-    }
-  } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = "📱 Send SMS"; }
-    alert("SMS failed: " + e.message);
-  }
+async function doSendSms(lid){
+  if(!currentUser){alert("Select your name from the dropdown first.");return;}
+  const btn=document.getElementById("sms-btn-"+lid);
+  if(btn){btn.disabled=true;btn.textContent="Sending...";}
+  try{
+    const res=await fetch("/send-sms",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser})});
+    const data=await res.json();
+    if(data.success){if(btn){btn.textContent="✓ SMS Sent!";btn.className="abtn btn-sms-sent";}setTimeout(()=>location.reload(),1200);}
+    else{if(btn){btn.disabled=false;btn.textContent="📱 Send SMS";}alert("SMS failed: "+(data.error||"Unknown error"));}
+  }catch(e){if(btn){btn.disabled=false;btn.textContent="📱 Send SMS";}alert("SMS failed: "+e.message);}
 }
-
 async function doAction(lid,action){if(!currentUser){alert("Select your name from the dropdown first.");return;}await fetch("/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,action})});location.reload();}
 async function sendComment(lid){if(!currentUser){alert("Select your name from the dropdown first.");return;}const input=document.getElementById("ci-"+lid);const body=input.value.trim();if(!body)return;input.value="";await fetch("/comment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,body})});location.reload();}
 
@@ -1007,7 +882,7 @@ document.addEventListener("keydown",e=>{
 });
 
 app.listen(PORT, async () => {
-  console.log(\`Sublet agent running on port \${PORT} [DRY_RUN=\${DRY_RUN}]\`);
+  console.log(`Sublet agent running on port ${PORT} [DRY_RUN=${DRY_RUN}]`);
   await initDb();
   fetchAndProcess().catch(console.error);
   setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
