@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 
 let cachedListings = [];
 let lastFetch = null;
+let isFetching = false;
 
 function passes(listing) {
   if ((listing.bedrooms || 0) < 2) return false;
@@ -34,62 +35,32 @@ async function fetchListings() {
   console.log("Craigslist fetch status:", res.status);
   const html = await res.text();
 
-  // Craigslist embeds listing data in a script tag as JSON
-  const match = html.match(/window\.__NEXT_DATA__\s*=\s*({[\s\S]*?})<\/script>/) ||
-                html.match(/cl\.search\.data\s*=\s*({[\s\S]*?});\s*\n/) ||
-                html.match(/"listings"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
-
-  if (match) {
-    console.log("Found embedded JSON data");
-    try {
-      const data = JSON.parse(match[1]);
-      const listings = data?.props?.pageProps?.searchResults?.data?.results ||
-                       data?.listings || data || [];
-      console.log(`Parsed ${listings.length} listings from JSON`);
-      return listings.map(item => ({
-        id: String(item.id || item.pid || Math.random()),
-        title: item.title || item.name || "",
-        url: item.url || `https://newyork.craigslist.org${item.path || ""}`,
-        post: item.body || item.description || item.snippet || "",
-        price: item.price ? `$${item.price}` : "",
-        bedrooms: item.bedrooms || item.br || 0,
-        location: item.neighborhood || item.location || "Manhattan, NY",
-        availableFrom: item.availableFrom || "",
-        datetime: item.date || item.postedAt || "",
-        phoneNumbers: [],
-        platform: "Craigslist",
-        address: { city: "New York" },
-      }));
-    } catch (e) {
-      console.log("JSON parse failed:", e.message);
-    }
-  }
-
-  // Fallback: parse listing links directly from HTML
-  console.log("Falling back to HTML link parsing...");
   const items = [];
   const linkPattern = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
-  const titlePattern = /class="posting-title"[^>]*>\s*<span[^>]*>([^<]+)<\/span>/g;
-  const pricePattern = /class="price">(\$[\d,]+)<\/span>/g;
-
   let linkMatch;
   const links = [];
   while ((linkMatch = linkPattern.exec(html)) !== null) {
-    links.push(linkMatch[1]);
+    if (!links.includes(linkMatch[1])) links.push(linkMatch[1]);
   }
-
   console.log(`Found ${links.length} listing links in HTML`);
 
   for (const link of links.slice(0, 50)) {
     const idMatch = link.match(/(\d+)\.html/);
     const id = idMatch ? idMatch[1] : Math.random().toString(36).slice(2);
     const titleFromUrl = link.split("/").pop().replace(".html", "").replace(/-/g, " ");
+
+    // Try to extract price from surrounding HTML
+    const linkIndex = html.indexOf(link);
+    const surrounding = html.slice(Math.max(0, linkIndex - 200), linkIndex + 200);
+    const priceMatch = surrounding.match(/\$[\d,]+/);
+    const price = priceMatch ? priceMatch[0] : "";
+
     items.push({
       id,
       title: titleFromUrl,
       url: link,
       post: "",
-      price: "",
+      price,
       bedrooms: 2,
       location: "Manhattan, NY",
       availableFrom: "",
@@ -100,7 +71,7 @@ async function fetchListings() {
     });
   }
 
-  console.log(`Returning ${items.length} items from HTML fallback`);
+  console.log(`Returning ${items.length} items`);
   return items;
 }
 
@@ -136,43 +107,61 @@ async function sendSmsAlert(count) {
     body: new URLSearchParams({
       To: ALERT_PHONE,
       From: TWILIO_FROM,
-      Body: `${count} new NYC sublet${count > 1 ? "s" : ""} match your criteria. Review them now: ${process.env.APP_URL || "your app"}`,
+      Body: `${count} new NYC sublet${count > 1 ? "s" : ""} match your criteria. Review: ${process.env.APP_URL || "https://sublet-agent-production.up.railway.app"}`,
     }).toString(),
   });
 }
 
 async function fetchAndProcess() {
-  console.log("Fetching listings from Craigslist...");
-  const items = await fetchListings();
-  const eligible = items.filter(passes);
-  console.log(`Found ${eligible.length} matching listings out of ${items.length}`);
+  if (isFetching) return 0;
+  isFetching = true;
+  try {
+    console.log("Fetching listings from Craigslist...");
+    const items = await fetchListings();
+    const eligible = items.filter(passes);
+    console.log(`Found ${eligible.length} matching listings out of ${items.length}`);
 
-  const seen = new Set(cachedListings.map(l => l.id));
-  const newListings = eligible.filter(l => !seen.has(l.id));
-  console.log(`${newListings.length} are new`);
+    const seen = new Set(cachedListings.map(l => l.id));
+    const newListings = eligible.filter(l => !seen.has(l.id));
+    console.log(`${newListings.length} are new`);
 
-  for (const listing of newListings) {
-    try {
-      listing.drafts = await generateDraft(listing);
-    } catch (e) {
-      console.error(`Draft failed for ${listing.id}:`, e.message);
+    for (const listing of newListings) {
+      try {
+        listing.drafts = await generateDraft(listing);
+      } catch (e) {
+        console.error(`Draft failed for ${listing.id}:`, e.message);
+      }
     }
-  }
 
-  if (newListings.length > 0) {
-    cachedListings = [...newListings, ...cachedListings].slice(0, 200);
-    await sendSmsAlert(newListings.length);
-  }
+    if (newListings.length > 0) {
+      cachedListings = [...newListings, ...cachedListings].slice(0, 200);
+      await sendSmsAlert(newListings.length);
+    }
 
-  lastFetch = new Date().toISOString();
-  return newListings.length;
+    lastFetch = new Date().toISOString();
+    return newListings.length;
+  } finally {
+    isFetching = false;
+  }
 }
 
-app.get("/", (req, res) => res.json({ status: "ok", lastFetch, count: cachedListings.length }));
+// Routes
+app.get("/", (req, res) => res.json({ status: "ok", lastFetch, count: cachedListings.length, fetching: isFetching }));
 
 app.get("/listings", (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.json(cachedListings);
+});
+
+// Accept both GET and POST for /refresh so it works from browser too
+app.get("/refresh", async (req, res) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  try {
+    const count = await fetchAndProcess();
+    res.json({ success: true, newListings: count, total: cachedListings.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post("/refresh", async (req, res) => {
@@ -194,5 +183,8 @@ app.options("*", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Sublet agent running on port ${PORT}`);
+  // Fetch on startup
   fetchAndProcess().catch(console.error);
+  // Then poll every 30 minutes
+  setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
 });
