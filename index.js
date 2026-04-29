@@ -36,7 +36,7 @@ async function runApifyScrape() {
     }
   );
   const runData = await runRes.json();
-  console.log("Apify run response:", JSON.stringify(runData?.data?.status));
+  console.log("Full Apify response:", JSON.stringify(runData));
   const datasetId = runData.data?.defaultDatasetId;
   if (!datasetId) throw new Error("No dataset ID returned from Apify");
 
