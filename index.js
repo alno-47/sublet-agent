@@ -8,6 +8,7 @@ const TWILIO_TOKEN = process.env.TWILIO_TOKEN;
 const TWILIO_FROM = process.env.TWILIO_FROM;
 const ALERT_PHONE = process.env.ALERT_PHONE;
 const DATABASE_URL = process.env.DATABASE_URL;
+const DRY_RUN = process.env.DRY_RUN !== "false"; // default true, set to "false" to go live
 const PORT = process.env.PORT || 3000;
 
 let isFetching = false;
@@ -42,7 +43,7 @@ async function saveListing(listing) {
   if (!db) return;
   try {
     await db.query(
-      "INSERT INTO listings (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+      "INSERT INTO listings (id, data) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET data = $2",
       [listing.id, JSON.stringify(listing)]
     );
   } catch (e) {
@@ -108,12 +109,44 @@ async function generateDraft(listing) {
   return JSON.parse(text.replace(/```json|```/g, "").trim());
 }
 
-async function sendSmsAlert(count) {
+async function sendSms(to, body) {
+  if (DRY_RUN) {
+    console.log(`[DRY RUN] Would send SMS to ${to}: ${body.slice(0, 80)}...`);
+    return { dryRun: true };
+  }
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") },
+    body: new URLSearchParams({ To: to, From: TWILIO_FROM, Body: body }).toString(),
+  });
+  return await res.json();
+}
+
+async function sendWhatsapp(to, body) {
+  const isInternational = !to.startsWith("+1");
+  if (!isInternational) return null;
+  if (DRY_RUN) {
+    console.log(`[DRY RUN] Would send WhatsApp to ${to}: ${body.slice(0, 80)}...`);
+    return { dryRun: true };
+  }
+  const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") },
+    body: new URLSearchParams({ To: `whatsapp:${to}`, From: `whatsapp:${TWILIO_FROM}`, Body: body }).toString(),
+  });
+  return await res.json();
+}
+
+async function sendAlertToMe(count) {
   if (!TWILIO_SID || !ALERT_PHONE) return;
+  if (DRY_RUN) {
+    console.log(`[DRY RUN] Would alert you: ${count} new listings found`);
+    return;
+  }
   await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") },
-    body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new NYC sublet${count > 1 ? "s" : ""} found. Review at: https://sublet-agent-production.up.railway.app` }).toString(),
+    body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new NYC sublet${count > 1 ? "s" : ""} found and messaged. Review: https://sublet-agent-production.up.railway.app` }).toString(),
   });
 }
 
@@ -121,17 +154,41 @@ async function fetchAndProcess() {
   if (isFetching) return 0;
   isFetching = true;
   try {
+    console.log(`Fetching listings... [DRY_RUN=${DRY_RUN}]`);
     const items = await fetchListings();
     const eligible = items.filter(passes);
     const existing = await loadListings();
     const seen = new Set(existing.map(l => l.id));
     const newListings = eligible.filter(l => !seen.has(l.id));
     console.log(`${newListings.length} new listings`);
+
     for (const listing of newListings) {
-      try { listing.drafts = await generateDraft(listing); } catch (e) { console.error(`Draft failed:`, e.message); }
+      // Generate drafts
+      try { listing.drafts = await generateDraft(listing); } 
+      catch (e) { console.error(`Draft failed:`, e.message); }
+
+      // Auto-send SMS/WhatsApp if phone number available
+      if (listing.phoneNumbers?.length > 0 && listing.drafts) {
+        const phone = listing.phoneNumbers[0];
+        const isInternational = !phone.startsWith("+1");
+        if (isInternational) {
+          const result = await sendWhatsapp(phone, listing.drafts.whatsapp);
+          listing.whatsappSent = !result?.dryRun;
+          listing.whatsappDryRun = result?.dryRun || false;
+        } else {
+          const result = await sendSms(phone, listing.drafts.sms);
+          listing.smsSent = !result?.dryRun;
+          listing.smsDryRun = result?.dryRun || false;
+        }
+      } else {
+        console.log(`[${listing.id}] No phone number — in-app message needs manual send`);
+        listing.needsManualSend = true;
+      }
+
       await saveListing(listing);
     }
-    if (newListings.length > 0) await sendSmsAlert(newListings.length);
+
+    if (newListings.length > 0) await sendAlertToMe(newListings.length);
     return newListings.length;
   } finally { isFetching = false; }
 }
@@ -151,33 +208,43 @@ app.get("/app", async (req, res) => {
     .container { max-width: 680px; margin: 0 auto; }
     h1 { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
     .subtitle { font-size: 14px; color: #666; margin-bottom: 1.5rem; }
+    .dry-run-banner { background: #faeeda; color: #854f0b; font-size: 13px; font-weight: 500; padding: 10px 16px; border-radius: 8px; margin-bottom: 16px; }
     .card { background: white; border: 0.5px solid #e0e0e0; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 14px; }
     .card-title { font-weight: 500; font-size: 15px; text-decoration: none; color: #1a1a1a; display: block; margin-bottom: 4px; }
     .card-location { font-size: 13px; color: #666; margin-bottom: 8px; }
     .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
     .badge { font-size: 12px; font-weight: 500; padding: 3px 8px; border-radius: 6px; background: #f1efe8; color: #5f5e5a; }
+    .badge-green { background: #eaf3de; color: #3b6d11; }
+    .badge-blue { background: #e6f1fb; color: #185fa5; }
+    .badge-amber { background: #faeeda; color: #854f0b; }
     .tabs { display: flex; gap: 4px; border-bottom: 0.5px solid #e0e0e0; padding-bottom: 8px; margin-bottom: 10px; }
     .tab { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: none; background: transparent; cursor: pointer; color: #666; }
     .tab.active { background: #f1efe8; color: #1a1a1a; font-weight: 500; }
     textarea { width: 100%; min-height: 90px; font-size: 13px; line-height: 1.6; resize: vertical; background: #f9f9f7; border: 0.5px solid #e0e0e0; border-radius: 8px; padding: 10px 12px; color: #1a1a1a; font-family: inherit; }
-    .btn { font-size: 13px; padding: 6px 16px; border-radius: 8px; border: 0.5px solid #e0e0e0; cursor: pointer; background: #f1efe8; color: #1a1a1a; margin-top: 10px; margin-right: 8px; }
-    .btn-send { background: #e6f1fb; color: #185fa5; }
-    .btn-sent { background: #eaf3de; color: #3b6d11; }
     .draft-area { display: none; }
     .draft-area.active { display: block; }
+    .status { font-size: 13px; margin-top: 8px; font-weight: 500; }
+    .status-sent { color: #3b6d11; }
+    .status-manual { color: #854f0b; }
   </style>
 </head>
 <body>
 <div class="container">
   <h1>NYC sublet review</h1>
   <p class="subtitle">Manhattan · 2–3BR · June–August · ${listings.length} listings</p>
+  ${DRY_RUN ? `<div class="dry-run-banner">⚠️ Dry run mode — no messages are being sent. Set DRY_RUN=false in Railway variables to go live.</div>` : ""}
   ${listings.map(l => `
-  <div class="card" id="card-${l.id}">
+  <div class="card">
     <a class="card-title" href="${l.url}" target="_blank">${l.title}</a>
     <div class="card-location">${l.location} ${l.price ? `· ${l.price}/mo` : ""}</div>
     <div class="badges">
-      <span class="badge">2BR</span>
+      <span class="badge badge-green">2BR</span>
       <span class="badge">Craigslist</span>
+      ${l.smsSent ? `<span class="badge badge-green">SMS sent</span>` : ""}
+      ${l.smsDryRun ? `<span class="badge badge-amber">SMS (dry run)</span>` : ""}
+      ${l.whatsappSent ? `<span class="badge badge-green">WhatsApp sent</span>` : ""}
+      ${l.whatsappDryRun ? `<span class="badge badge-amber">WhatsApp (dry run)</span>` : ""}
+      ${l.needsManualSend ? `<span class="badge badge-blue">Needs manual send</span>` : ""}
     </div>
     ${l.drafts ? `
     <div class="tabs">
@@ -190,9 +257,7 @@ app.get("/app", async (req, res) => {
     <div id="${l.id}-email" class="draft-area"><textarea>Subject: ${l.drafts.email?.subject || ""}\n\n${l.drafts.email?.body || ""}</textarea></div>
     <div id="${l.id}-sms" class="draft-area"><textarea>${l.drafts.sms || ""}</textarea></div>
     <div id="${l.id}-whatsapp" class="draft-area"><textarea>${l.drafts.whatsapp || ""}</textarea></div>
-    <button class="btn btn-sent" onclick="markSent('${l.id}')">Mark as sent</button>
-    <button class="btn" onclick="markSkipped('${l.id}')">Skip</button>
-    ` : `<p style="font-size:13px;color:#666">Drafts generating in background...</p>`}
+    ` : `<p style="font-size:13px;color:#666">Drafts generating...</p>`}
   </div>`).join("")}
 </div>
 <script>
@@ -201,14 +266,6 @@ function showTab(id, tab, btn) {
   document.getElementById(id+'-'+tab).classList.add('active');
   btn.closest('.tabs').querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-}
-function markSent(id) {
-  const card = document.getElementById('card-'+id);
-  card.style.opacity = '0.4';
-  card.querySelector('.btn-sent').textContent = 'Sent ✓';
-}
-function markSkipped(id) {
-  document.getElementById('card-'+id).style.opacity = '0.4';
 }
 </script>
 </body>
@@ -219,17 +276,17 @@ app.get("/", (req, res) => res.redirect("/app"));
 app.get("/listings", async (req, res) => { res.header("Access-Control-Allow-Origin", "*"); res.json(await loadListings()); });
 app.get("/refresh", async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count }); }
+  try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count, dryRun: DRY_RUN }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post("/refresh", async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count }); }
+  try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count, dryRun: DRY_RUN }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.listen(PORT, async () => {
-  console.log(`Sublet agent running on port ${PORT}`);
+  console.log(`Sublet agent running on port ${PORT} [DRY_RUN=${DRY_RUN}]`);
   await initDb();
   fetchAndProcess().catch(console.error);
   setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
