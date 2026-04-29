@@ -22,46 +22,44 @@ function passes(listing) {
   return true;
 }
 
-async function fetchRssListings() {
-  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent("https://newyork.craigslist.org/search/sub?format=rss")}`;
-  const res = await fetch(proxyUrl);
-  const xml = await res.text();
-  console.log("RSS fetch status:", res.status);
-  console.log("First 500 chars:", xml.slice(0, 500));
+async function fetchListings() {
+  const url = "https://newyork.craigslist.org/search/sub?format=json&hasPic=1&min_bedrooms=2&max_bedrooms=3";
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Referer": "https://newyork.craigslist.org/",
+    }
+  });
+  console.log("Craigslist fetch status:", res.status);
+  const text = await res.text();
+  console.log("First 300 chars:", text.slice(0, 300));
 
-  const items = [];
-  const entries = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
-  for (const entry of entries) {
-    const get = (tag) => {
-      const m = entry.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>|<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
-      return m ? (m[1] || m[2] || "").trim() : "";
-    };
-    const title = get("title");
-    const url = (entry.match(/<link>(.*?)<\/link>/) || [])[1] || "";
-    const description = get("description");
-    const pubDate = get("pubDate");
-
-    const brMatch = title.match(/(\d)\s*b(r|ed)/i);
-    const bedrooms = brMatch ? parseInt(brMatch[1]) : 0;
-    const priceMatch = description.match(/\$[\d,]+/);
-    const price = priceMatch ? priceMatch[0] : "";
-
-    items.push({
-      id: url.match(/(\d+)\.html/)?.[1] || Math.random().toString(36).slice(2),
-      title,
-      url,
-      post: description.replace(/<[^>]+>/g, "").trim(),
-      price,
-      bedrooms,
-      location: "Manhattan, NY",
-      availableFrom: "",
-      datetime: pubDate,
-      phoneNumbers: [],
-      platform: "Craigslist",
-      address: { city: "New York" },
-    });
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    console.log("Not JSON, trying to parse HTML...");
+    return [];
   }
-  console.log(`RSS returned ${items.length} items`);
+
+  const items = (data.items || data || []).map(item => ({
+    id: item.id || item.pid || String(Math.random()),
+    title: item.title || item.name || "",
+    url: item.url || `https://newyork.craigslist.org${item.path || ""}`,
+    post: item.body || item.description || "",
+    price: item.price ? `$${item.price}` : "",
+    bedrooms: item.bedrooms || 0,
+    location: item.neighborhood || item.location || "Manhattan, NY",
+    availableFrom: "",
+    datetime: item.date || item.posted_at || "",
+    phoneNumbers: [],
+    platform: "Craigslist",
+    address: { city: "New York" },
+  }));
+
+  console.log(`Fetched ${items.length} items`);
   return items;
 }
 
@@ -103,8 +101,8 @@ async function sendSmsAlert(count) {
 }
 
 async function fetchAndProcess() {
-  console.log("Fetching listings from Craigslist RSS...");
-  const items = await fetchRssListings();
+  console.log("Fetching listings from Craigslist...");
+  const items = await fetchListings();
   const eligible = items.filter(passes);
   console.log(`Found ${eligible.length} matching listings out of ${items.length}`);
 
