@@ -514,6 +514,19 @@ app.post("/action", async (req, res) => { const { listingId, userName, action } 
 app.post("/comment", async (req, res) => { const { listingId, userName, body } = req.body; if (!listingId || !userName || !body) return res.status(400).json({ error: "Missing" }); await saveComment(listingId, userName, body); res.json({ success: true }); });
 app.post("/seen", async (req, res) => { const { listingIds, userName } = req.body; if (!listingIds || !userName) return res.status(400).json({ error: "Missing" }); await markAllSeen(listingIds, userName); res.json({ success: true }); });
 
+
+app.get("/clear-seed", async (req, res) => {
+  if (!db) return res.status(500).json({ error: "No database" });
+  try {
+    const r1 = await db.query("DELETE FROM sms_messages WHERE phone LIKE '+121255501%'");
+    const r2 = await db.query("DELETE FROM actions WHERE user_name IN ('Alex (Owner)', 'Julian', 'Nora') AND action IN ('reply','viewing','pass') AND created_at < NOW() - INTERVAL '1 hour'");
+    const r3 = await db.query("DELETE FROM comments WHERE created_at < NOW() - INTERVAL '1 hour'");
+    res.json({ success: true, smsDeleted: r1.rowCount, actionsDeleted: r2.rowCount, commentsDeleted: r3.rowCount });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get("/seed-history", async (req, res) => {
   if (!db) return res.status(500).json({ error: "No database" });
   try {
