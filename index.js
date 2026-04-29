@@ -27,6 +27,7 @@ async function fetchRssListings() {
   const res = await fetch(proxyUrl);
   const xml = await res.text();
   console.log("RSS fetch status:", res.status);
+  console.log("First 500 chars:", xml.slice(0, 500));
 
   const items = [];
   const entries = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
