@@ -611,7 +611,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .hero{background:linear-gradient(135deg,#0070f3 0%,#0051a8 100%);color:white;padding:28px 32px 24px}
 .hero-inner{max-width:none;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap}
 .hero-left h2{font-size:22px;font-weight:700;letter-spacing:-0.4px;margin-bottom:6px}
-.hero-left p{font-size:14px;opacity:0.85;max-width:520px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hero-left p{font-size:14px;opacity:0.85;max-width:480px;line-height:1.5}
 .hero-pills{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 .hero-pill{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:500}
 .hero-right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
