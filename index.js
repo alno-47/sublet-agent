@@ -613,7 +613,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .hero-left h2{font-size:22px;font-weight:700;letter-spacing:-0.4px;margin-bottom:6px}
 .hero-left p{font-size:14px;opacity:0.85;max-width:480px;line-height:1.5}
 .hero-pills{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
-.hero-pill{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:500}
+.hero-pill{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:3px 9px;font-size:11px;font-weight:500}
 .hero-right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0}
 .hero-stats{display:flex;gap:20px;align-items:center}
 .hero-stat-block{text-align:center}
@@ -840,14 +840,14 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="hero-inner">
     <div class="hero-left">
       <h2>Manhattan Sublet Search · Summer 2026</h2>
-      <p>Autonomous leasing agent that monitors rental listings, scores by fit, executes outreach across multiple channels and delivers daily summaries.</p>
+      <p>Autonomous leasing agent that monitors listings, scores by fit, executes multi-channel outreach and delivers daily summaries.</p>
       <div class="hero-pills">
-        <span class="hero-pill">🤖 6 platforms scraped every 30 min</span>
-        <span class="hero-pill">🧠 AI fit scoring + assessment</span>
-        <span class="hero-pill">📱 Automated SMS with A/B testing</span>
-        <span class="hero-pill">💬 Reply detection &amp; chat threads</span>
-        <span class="hero-pill">👥 Shared team workspace</span>
-        <span class="hero-pill">📧 Daily performance summary</span>
+        <span class="hero-pill">🤖 6 platforms · 30 min</span>
+        <span class="hero-pill">🧠 AI fit assessment</span>
+        <span class="hero-pill">📱 SMS with A/B testing</span>
+        <span class="hero-pill">💬 Reply detection</span>
+        <span class="hero-pill">👥 Shared workspace</span>
+        <span class="hero-pill">📧 Daily summary</span>
       </div>
     </div>
     <div class="hero-right">
