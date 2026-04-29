@@ -13,6 +13,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const DRY_RUN = process.env.DRY_RUN !== "false";
 const PORT = process.env.PORT || 3000;
 const TARGET_PRICE = 6000;
+const PASSWORD = "dsail";
 
 let isFetching = false;
 let db = null;
@@ -94,6 +95,69 @@ async function fetchListingDetail(url, idx) {
   } catch (e) { console.error(`Failed to fetch ${url}:`, e.message); return null; }
 }
 
+async function fetchFurnishedFinder() {
+  console.log("Fetching Furnished Finder...");
+  try {
+    const res = await fetch("https://www.furnishedfinder.com/housing/new-york-city/manhattan", {
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html" }
+    });
+    if (!res.ok) { console.log("Furnished Finder returned", res.status); return []; }
+    const html = await res.text();
+    const items = [];
+    const listingMatches = html.matchAll(/href="(\/housing\/[^"]+)"/g);
+    const links = [...new Set([...listingMatches].map(m => "https://www.furnishedfinder.com" + m[1]))].slice(0, 15);
+    console.log(`Furnished Finder: found ${links.length} links`);
+    for (let i = 0; i < links.length; i++) {
+      try {
+        await sleep(500 + Math.random() * 500);
+        const r = await fetch(links[i], { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html" } });
+        if (!r.ok) continue;
+        const h = await r.text();
+        const titleM = h.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+        const title = titleM ? titleM[1].replace(/<[^>]+>/g, "").trim() : "Manhattan Furnished Rental";
+        const priceM = h.match(/\$[\d,]+\s*(?:\/mo|per month|month)/i);
+        const price = priceM ? priceM[0].split(/\s/)[0] : "";
+        const brM = (title + " " + h.slice(0, 2000)).match(/(\d)\s*b(?:r|ed(?:room)?s?)/i);
+        const bedrooms = brM ? parseInt(brM[1]) : 2;
+        const id = "ff_" + links[i].split("/").pop().replace(/[^a-z0-9]/gi, "_");
+        items.push({ id, title, url: links[i], post: "", price, bedrooms, location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(), phoneNumbers: [], amenities: ["furnished"], platform: "Furnished Finder", address: { city: "New York" }, pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] });
+      } catch (e) { console.error("FF detail error:", e.message); }
+    }
+    console.log(`Furnished Finder: scraped ${items.length} listings`);
+    return items;
+  } catch (e) { console.error("Furnished Finder failed:", e.message); return []; }
+}
+
+async function fetchHotpads() {
+  console.log("Fetching Hotpads...");
+  try {
+    const res = await fetch("https://hotpads.com/new-york-city-ny/rent/apartment?listing-types=FOR_RENT&min-beds=2&max-beds=3&short-term=true", {
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9" }
+    });
+    if (!res.ok) { console.log("Hotpads returned", res.status); return []; }
+    const html = await res.text();
+    const items = [];
+    // Extract from JSON-LD or inline data
+    const dataMatch = html.match(/"listingId":"([^"]+)"[^}]*"address":"([^"]+)"[^}]*"price":(\d+)/g) || [];
+    const seen = new Set();
+    for (const m of dataMatch.slice(0, 15)) {
+      const idM = m.match(/"listingId":"([^"]+)"/);
+      const addrM = m.match(/"address":"([^"]+)"/);
+      const priceM = m.match(/"price":(\d+)/);
+      if (!idM) continue;
+      const id = "hp_" + idM[1];
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const address = addrM ? addrM[1] : "Manhattan, NY";
+      const price = priceM ? "$" + parseInt(priceM[1]).toLocaleString() : "";
+      if (!address.toLowerCase().includes("new york") && !address.toLowerCase().includes("manhattan")) continue;
+      items.push({ id, title: `${address} Rental`, url: `https://hotpads.com/listing/${idM[1]}`, post: "", price, bedrooms: 2, location: address, availableFrom: "", datetime: new Date().toISOString(), phoneNumbers: [], amenities: [], platform: "Hotpads", address: { city: "New York" }, pics: [APARTMENT_PHOTOS[items.length % APARTMENT_PHOTOS.length]] });
+    }
+    console.log(`Hotpads: scraped ${items.length} listings`);
+    return items;
+  } catch (e) { console.error("Hotpads failed:", e.message); return []; }
+}
+
 async function initDb() {
   const { default: pg } = await import("pg");
   const { Pool } = pg;
@@ -150,8 +214,8 @@ async function saveComment(lid, un, body) {
   await db.query("INSERT INTO comments (listing_id, user_name, body) VALUES ($1, $2, $3)", [lid, un, body]);
 }
 
-async function fetchListings() {
-  console.log("Fetching listing index...");
+async function fetchCraigslist() {
+  console.log("Fetching Craigslist...");
   const res = await fetch("https://newyork.craigslist.org/search/mnh/sub?min_bedrooms=2&max_bedrooms=3", {
     headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html" }
   });
@@ -159,12 +223,11 @@ async function fetchListings() {
   const pat = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
   let m; const links = [];
   while ((m = pat.exec(html)) !== null) { if (!links.includes(m[1])) links.push(m[1]); }
-  console.log(`Found ${links.length} listing links, fetching details for up to 50...`);
+  console.log(`Craigslist: found ${links.length} links, fetching up to 50...`);
   const items = [];
   for (let i = 0; i < Math.min(links.length, 50); i++) {
     const link = links[i];
     const id = (link.match(/(\d+)\.html/) || [])[1] || Math.random().toString(36).slice(2);
-    console.log(`Fetching listing ${i + 1}/50: ${id}`);
     const detail = await fetchListingDetail(link, i);
     if (detail && detail.title) {
       items.push({ id, title: detail.title, url: link, post: detail.post, price: detail.price, bedrooms: detail.bedrooms, location: detail.location || "Manhattan, NY", availableFrom: detail.availableFrom, datetime: new Date().toISOString(), phoneNumbers: detail.phoneNumbers || [], amenities: detail.amenities || [], platform: "Craigslist", address: { city: "New York" }, pics: detail.pics?.length ? detail.pics : [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] });
@@ -172,7 +235,6 @@ async function fetchListings() {
       items.push({ id, title: "Manhattan Sublet", url: link, post: "", price: "", bedrooms: 2, location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(), phoneNumbers: [], amenities: [], platform: "Craigslist", address: { city: "New York" }, pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] });
     }
   }
-  console.log(`Successfully fetched details for ${items.length} listings`);
   return items;
 }
 
@@ -181,16 +243,11 @@ async function generateDraftAndScore(l) {
 {"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence","availableFrom":"june"}
 
 inApp: Short casual Craigslist internal message, 3-4 sentences. Say they are 3 HBS students looking for a summer sublet June-August 2026, ask if still available and about the price. Sign off "- Alex, Julian & Nora". No Dear/Hi, just get to the point.
-
-email: Professional but warm. Subject line should mention dates and bedroom count. Body introduces all three as HBS MBA students, mentions they are responsible international students, confirms exact dates (June 1 - Aug 31), asks about availability, price, and viewing. Sign off "Alex, Julian & Nora".
-
+email: Professional but warm. Subject line should mention dates and bedroom count. Body introduces all three as HBS MBA students, confirms exact dates (June 1 - Aug 31), asks about availability, price, and viewing. Sign off "Alex, Julian & Nora".
 sms: Max 2 sentences. Just: who they are, what they want, the dates. No sign-off needed.
-
-whatsapp: Casual and friendly, 3-5 sentences. Similar to inApp but slightly warmer, can use an emoji or two. Sign off "Alex, Julian & Nora".
-
+whatsapp: Casual and friendly, 3-5 sentences. Sign off "Alex, Julian & Nora".
 score: 1-10 strictly on price ($4-8k/mo ideal), Manhattan location, June availability, furnished status.
-
-availableFrom: Extract the availability month from the listing as a lowercase string - one of: "may", "june", "july", "august", "september", or "unknown". Use the description to infer this even if not explicitly stated.`;
+availableFrom: Extract the availability month as lowercase - one of: "may", "june", "july", "august", "september", or "unknown".`;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -247,11 +304,20 @@ async function fetchAndProcess() {
   if (isFetching) return 0;
   isFetching = true;
   try {
-    const items = await fetchListings();
+    const [clItems, ffItems, hpItems] = await Promise.allSettled([
+      fetchCraigslist(),
+      fetchFurnishedFinder(),
+      fetchHotpads()
+    ]);
+    const items = [
+      ...(clItems.status === "fulfilled" ? clItems.value : []),
+      ...(ffItems.status === "fulfilled" ? ffItems.value : []),
+      ...(hpItems.status === "fulfilled" ? hpItems.value : []),
+    ];
     const existing = await loadListings();
     const seen = new Set(existing.map(l => l.id));
     const newItems = items.filter(l => !seen.has(l.id));
-    console.log(`${newItems.length} new listings before filtering`);
+    console.log(`${newItems.length} new listings across all platforms`);
     let newCount = 0;
     for (const l of newItems) {
       const reason = rejectReason(l);
@@ -259,7 +325,6 @@ async function fetchAndProcess() {
         l.rejected = true;
         l.rejectReason = reason;
         await saveListing(l);
-        console.log(`Rejected: ${l.id} - ${reason}`);
         continue;
       }
       try {
@@ -294,6 +359,25 @@ app.post("/send-sms", async (req, res) => {
   return res.status(500).json({ error: result.message || "SMS failed" });
 });
 
+app.post("/send-all-sms", async (req, res) => {
+  const { userName } = req.body;
+  if (!userName) return res.status(400).json({ error: "Missing userName" });
+  const listings = await loadListings();
+  const actions = await loadActions();
+  const contactedIds = new Set(actions.filter(a => a.action === "contacted").map(a => a.listing_id));
+  const toContact = listings.filter(l => !l.rejected && !contactedIds.has(l.id) && l.phoneNumbers?.length > 0 && l.drafts?.sms);
+  let sent = 0, failed = 0;
+  for (const l of toContact) {
+    try {
+      const result = await sendSms(l.phoneNumbers[0], l.drafts.sms);
+      if (result.dryRun || result.sid) { await saveAction(l.id, userName, "contacted"); sent++; }
+      else failed++;
+    } catch (e) { failed++; }
+    await sleep(300);
+  }
+  res.json({ success: true, sent, failed, total: toContact.length });
+});
+
 app.post("/action", async (req, res) => { const { listingId, userName, action } = req.body; if (!listingId || !userName || !action) return res.status(400).json({ error: "Missing" }); await saveAction(listingId, userName, action); res.json({ success: true }); });
 app.post("/comment", async (req, res) => { const { listingId, userName, body } = req.body; if (!listingId || !userName || !body) return res.status(400).json({ error: "Missing" }); await saveComment(listingId, userName, body); res.json({ success: true }); });
 app.post("/seen", async (req, res) => { const { listingIds, userName } = req.body; if (!listingIds || !userName) return res.status(400).json({ error: "Missing" }); await markAllSeen(listingIds, userName); res.json({ success: true }); });
@@ -313,8 +397,6 @@ app.get("/", async (req, res) => {
   const lastUpdated = lastFetchTime ? timeAgo(lastFetchTime) : "never";
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const todayCount = activeListings.filter(l => new Date(l.datetime) >= today).length;
-
-  // Compute status counts for sidebar badges
   const statusCounts = { pending: 0, contacted: 0, reply: 0, viewing: 0, skipped: 0 };
   activeListings.forEach(l => {
     const la = actionMap[l.id] || [];
@@ -325,9 +407,7 @@ app.get("/", async (req, res) => {
     const status = ra ? "reply" : va ? "viewing" : ca ? "contacted" : pa ? "skipped" : "pending";
     statusCounts[status] = (statusCounts[status] || 0) + 1;
   });
-
   const LOGO_SVG = `<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="36" rx="8" fill="#0070f3"/><path d="M18 8L30 18H27V28H9V18H6L18 8Z" fill="white"/><rect x="14" y="20" width="8" height="8" rx="1.5" fill="#0070f3"/></svg>`;
-
   const allListings = [...activeListings, ...rejectedListings];
 
   res.send(`<!DOCTYPE html>
@@ -342,7 +422,7 @@ app.get("/", async (req, res) => {
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --blue:#0070f3;--blue-dark:#0051a8;--blue-light:#e8f2ff;
-  --green:#00a651;--green-bg:#e6f7ee;--green-light:#d1fae5;
+  --green:#00a651;--green-bg:#e6f7ee;--green-light:#86efac;
   --amber:#f59e0b;--amber-bg:#fffbeb;
   --red:#e53e3e;--red-bg:#fff5f5;
   --purple:#7c3aed;--purple-bg:#f5f3ff;
@@ -356,6 +436,16 @@ app.get("/", async (req, res) => {
   --sh-lg:0 8px 30px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.06);
 }
 body{font-family:'Inter',sans-serif;background:var(--gray-50);color:var(--gray-900);min-height:100vh;font-size:14px;line-height:1.5}
+.pw-overlay{position:fixed;inset:0;background:rgba(10,10,20,0.7);backdrop-filter:blur(12px);z-index:1000;display:flex;align-items:center;justify-content:center}
+.pw-box{background:var(--white);border-radius:16px;padding:36px 40px;width:320px;box-shadow:var(--sh-lg);text-align:center}
+.pw-logo{margin-bottom:16px;display:flex;justify-content:center}
+.pw-title{font-size:16px;font-weight:700;margin-bottom:6px}
+.pw-sub{font-size:13px;color:var(--gray-400);margin-bottom:20px}
+.pw-input{width:100%;padding:10px 14px;border:1.5px solid var(--gray-200);border-radius:var(--r);font-family:'Inter',sans-serif;font-size:14px;text-align:center;letter-spacing:4px;margin-bottom:12px;transition:border-color 0.15s}
+.pw-input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,112,243,0.1)}
+.pw-btn{width:100%;padding:10px;border:none;border-radius:var(--r);background:var(--blue);color:white;font-size:14px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;transition:background 0.15s}
+.pw-btn:hover{background:var(--blue-dark)}
+.pw-error{font-size:12px;color:var(--red);margin-top:8px;display:none}
 nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;box-shadow:var(--sh-sm)}
 .nav-brand{display:flex;align-items:center;gap:10px}
 .nav-logo{display:flex;align-items:center;flex-shrink:0}
@@ -416,11 +506,18 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .kb-hint{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--r);padding:10px 12px;font-size:11px;color:var(--gray-400);line-height:2}
 .kb-key{display:inline-block;background:var(--white);border:1px solid var(--gray-300);border-radius:4px;padding:1px 5px;font-size:11px;font-weight:600;color:var(--gray-600);box-shadow:0 1px 0 var(--gray-300);margin-right:3px}
 .main-content{padding:20px 24px}
-.main-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.main-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px}
 .results-lbl{font-size:13px;color:var(--gray-400)}
 .results-lbl strong{color:var(--gray-900)}
+.hdr-btns{display:flex;gap:8px}
 .refresh-btn{height:32px;padding:0 12px;border-radius:var(--r-sm);border:1px solid var(--gray-200);background:var(--white);cursor:pointer;font-size:12px;font-family:'Inter',sans-serif;color:var(--gray-500);display:flex;align-items:center;gap:5px;transition:all 0.12s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
+.send-all-btn{height:32px;padding:0 12px;border-radius:var(--r-sm);border:1px solid #86efac;background:var(--green-bg);cursor:pointer;font-size:12px;font-family:'Inter',sans-serif;color:var(--green);display:flex;align-items:center;gap:5px;transition:all 0.12s;font-weight:500}
+.send-all-btn:hover{background:#dcfce7;border-color:var(--green)}
+.send-all-btn:disabled{opacity:0.5;cursor:not-allowed}
+.avail-legend-bar{display:flex;gap:16px;align-items:center;padding:8px 12px;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r);margin-bottom:12px}
+.avail-legend-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray-500)}
+.avail-legend-dot{width:12px;height:6px;border-radius:2px;flex-shrink:0}
 .skeleton-list{display:flex;flex-direction:column;gap:12px}
 .skeleton-card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;display:grid;grid-template-columns:200px 1fr;height:160px}
 .skeleton-img{background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-200) 50%,var(--gray-100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite}
@@ -449,25 +546,21 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .sf-low{background:rgba(229,62,62,0.92);color:white}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.7}}
 .card-body{padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
-.card-row1{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.card-row1{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
 .card-title{font-size:13px;font-weight:600;color:var(--gray-900);line-height:1.3;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.card-price-wrap{text-align:right;flex-shrink:0}
+.card-price-wrap{text-align:right;flex-shrink:0;min-width:120px}
 .card-price{font-size:15px;font-weight:700}
 .card-price-diff{font-size:11px;font-weight:500;margin-top:1px}
 .card-address{font-size:12px;color:var(--gray-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .price-below{color:var(--green)}.price-above{color:var(--red)}.price-avg{color:var(--gray-400)}
-.card-assessment{font-size:11px;color:var(--gray-700);line-height:1.4;background:var(--gray-50);border-left:2px solid var(--blue);padding:3px 7px;border-radius:0 4px 4px 0;margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-assessment{font-size:11px;color:var(--gray-700);line-height:1.5;background:var(--gray-50);border-left:2px solid var(--blue);padding:3px 7px;border-radius:0 4px 4px 0;margin:3px 0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding-right:130px}
 .card-assessment strong{color:var(--blue);font-weight:600}
 .reject-reason{font-size:11px;color:var(--red);background:var(--red-bg);padding:2px 7px;border-radius:4px;margin:2px 0;display:inline-block}
-.avail-legend{display:flex;gap:10px;margin-bottom:4px;flex-wrap:wrap}
-.avail-legend-item{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-400)}
-.avail-legend-dot{width:10px;height:5px;border-radius:2px}
 .avail-bar{margin:2px 0}
 .avail-label{font-size:10px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;display:flex;justify-content:space-between}
 .avail-track{height:5px;background:var(--gray-200);border-radius:3px;position:relative;overflow:hidden}
-.avail-window{position:absolute;top:-1px;height:7px;border-radius:3px;background:rgba(0,112,243,0.12);border:1px solid rgba(0,112,243,0.3)}
 .avail-fill{position:absolute;top:0;height:100%;border-radius:3px}
-.af-in{background:var(--green)}.af-out{background:#86efac}.af-gray{background:var(--gray-300)}
+.af-in{background:var(--green)}.af-out{background:var(--green-light)}.af-unknown{background:var(--gray-300)}
 .card-bottom{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .tag{font-size:11px;font-weight:500;padding:2px 7px;border-radius:20px}
@@ -536,20 +629,27 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .drawer-title{font-size:15px;font-weight:600;margin-bottom:16px}
 .drawer-section{margin-bottom:20px}
 @media(max-width:768px){
-  .layout{grid-template-columns:1fr}
-  .sidebar{display:none}
-  .card{grid-template-columns:120px 1fr;height:155px}
-  .card-img-wrap{height:155px}
-  .panel{width:100vw}
-  nav{padding:0 16px}
-  nav .nav-sub{display:none}
-  .main-content{padding:14px 16px}
-  .hero{padding:20px 16px}
-  .mobile-filter-btn{display:flex}
+  .layout{grid-template-columns:1fr}.sidebar{display:none}
+  .card{grid-template-columns:120px 1fr;height:155px}.card-img-wrap{height:155px}
+  .panel{width:100vw}nav{padding:0 16px}nav .nav-sub{display:none}
+  .main-content{padding:14px 16px}.hero{padding:20px 16px}.mobile-filter-btn{display:flex}
 }
 </style>
 </head>
 <body>
+
+<!-- Password overlay -->
+<div class="pw-overlay" id="pw-overlay">
+  <div class="pw-box">
+    <div class="pw-logo">${LOGO_SVG}</div>
+    <div class="pw-title">Summer Sublet Agent</div>
+    <div class="pw-sub">Enter password to continue</div>
+    <input class="pw-input" type="password" id="pw-input" placeholder="••••••" onkeydown="if(event.key==='Enter')checkPw()">
+    <button class="pw-btn" onclick="checkPw()">Unlock</button>
+    <div class="pw-error" id="pw-error">Incorrect password</div>
+  </div>
+</div>
+
 <nav>
   <div class="nav-brand">
     <div class="nav-logo">${LOGO_SVG}</div>
@@ -615,13 +715,13 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="sb-section">
       <div class="sb-label">Status</div>
       <div class="fi-group">
-        <button class="fi active" onclick="setFilter('all',this)">All listings <span class="fc">${activeListings.length}</span></button>
+        <button class="fi active" onclick="setFilter('all',this)">🏠 All listings <span class="fc">${activeListings.length}</span></button>
         <button class="fi" onclick="setFilter('new',this)">✨ New <span class="fc">${newIds.length}</span></button>
-        <button class="fi" onclick="setFilter('pending',this)">Needs Review <span class="fc">${statusCounts.pending}</span></button>
-        <button class="fi" onclick="setFilter('contacted',this)">Contacted <span class="fc">${statusCounts.contacted}</span></button>
+        <button class="fi" onclick="setFilter('pending',this)">👀 Needs Review <span class="fc">${statusCounts.pending}</span></button>
+        <button class="fi" onclick="setFilter('contacted',this)">📱 Contacted <span class="fc">${statusCounts.contacted}</span></button>
         <button class="fi" onclick="setFilter('reply',this)">💬 Got reply <span class="fc">${statusCounts.reply}</span></button>
         <button class="fi" onclick="setFilter('viewing',this)">📅 Viewing <span class="fc">${statusCounts.viewing}</span></button>
-        <button class="fi" onclick="setFilter('skipped',this)">Passed <span class="fc">${statusCounts.skipped}</span></button>
+        <button class="fi" onclick="setFilter('skipped',this)">👎 Passed <span class="fc">${statusCounts.skipped}</span></button>
         <button class="fi" onclick="setFilter('rejected',this)">🚫 Rejected <span class="fc">${rejectedListings.length}</span></button>
       </div>
     </div>
@@ -668,7 +768,16 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <main class="main-content">
     <div class="main-hdr">
       <div class="results-lbl"><strong id="results-count">${activeListings.length} listings</strong>${avgPrice ? ` · avg $${avgPrice.toLocaleString()}/mo` : ""} · updated ${lastUpdated}</div>
-      <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
+      <div class="hdr-btns">
+        <button class="send-all-btn" id="send-all-btn" onclick="sendAllSms()">📱 Send All SMS</button>
+        <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
+      </div>
+    </div>
+    <div class="avail-legend-bar">
+      <span style="font-size:11px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.5px;margin-right:4px">Availability:</span>
+      <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--green)"></div>Available during search period</div>
+      <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--green-light)"></div>Available outside search period</div>
+      <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--gray-300)"></div>Unknown</div>
     </div>
     <div id="cards-container">
     ${allListings.length === 0 ? `<div class="skeleton-list">${[1,2,3].map(()=>`<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-body"><div class="skeleton-line wide"></div><div class="skeleton-line medium"></div><div class="skeleton-line short"></div><div class="skeleton-line medium"></div></div></div>`).join("")}</div>` :
@@ -686,51 +795,28 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       const loc = (l.location || "").toLowerCase();
       const score = l.score || 0;
       const sc = score >= 7 ? "high" : score >= 5 ? "mid" : score > 0 ? "low" : "none";
-      const statusTag = isRejected ? `<span class="tag tag-red">🚫 Rejected</span>` : ra ? `<span class="tag tag-purple">💬 Reply</span>` : va ? `<span class="tag tag-blue">📅 Viewing</span>` : ca ? `<span class="tag tag-green">✓ Contacted</span>` : pa ? `<span class="tag tag-gray">Passed</span>` : "";
+      const statusTag = isRejected ? `<span class="tag tag-red">🚫 Rejected</span>` : ra ? `<span class="tag tag-purple">💬 Reply</span>` : va ? `<span class="tag tag-blue">📅 Viewing</span>` : ca ? `<span class="tag tag-green">✓ Contacted</span>` : pa ? `<span class="tag tag-gray">👎 Passed</span>` : "";
 
-      // Price vs target and vs avg
       let priceDiff = "";
       if (price > 0) {
         const targetDiff = Math.round((price - 6000) / 6000 * 100);
-        const targetLine = targetDiff < -5
-          ? `<div class="card-price-diff price-below">↓ ${Math.abs(targetDiff)}% below target</div>`
-          : targetDiff > 5
-          ? `<div class="card-price-diff price-above">↑ ${Math.abs(targetDiff)}% above target</div>`
-          : `<div class="card-price-diff price-avg">≈ on target</div>`;
+        const targetLine = targetDiff < -5 ? `<div class="card-price-diff price-below">↓ ${Math.abs(targetDiff)}% below target</div>` : targetDiff > 5 ? `<div class="card-price-diff price-above">↑ ${Math.abs(targetDiff)}% above target</div>` : `<div class="card-price-diff price-avg">≈ on target</div>`;
         let avgLine = "";
         if (avgPrice > 0) {
           const avgDiff = Math.round((price - avgPrice) / avgPrice * 100);
-          avgLine = avgDiff < -5
-            ? `<div class="card-price-diff price-below" style="font-size:10px">↓ ${Math.abs(avgDiff)}% below avg</div>`
-            : avgDiff > 5
-            ? `<div class="card-price-diff price-above" style="font-size:10px">↑ ${Math.abs(avgDiff)}% above avg</div>`
-            : `<div class="card-price-diff price-avg" style="font-size:10px">≈ avg price</div>`;
+          avgLine = avgDiff < -5 ? `<div class="card-price-diff price-below" style="font-size:10px">↓ ${Math.abs(avgDiff)}% below avg</div>` : avgDiff > 5 ? `<div class="card-price-diff price-above" style="font-size:10px">↑ ${Math.abs(avgDiff)}% above avg</div>` : `<div class="card-price-diff price-avg" style="font-size:10px">≈ avg price</div>`;
         }
         priceDiff = targetLine + avgLine;
       }
 
-      // Availability bar
-      const monthPos = { may: 0, june: 25, july: 50, august: 75 };
+      // Availability bar: may=outside(light green), june/july/august=in window(dark green), unknown=gray full bar
       const avStr = (l.availableFrom || "").toLowerCase();
+      const monthPos = { may: 0, june: 25, july: 50, august: 75 };
       let avPos = -1;
       for (const [mon, pos] of Object.entries(monthPos)) { if (avStr.includes(mon)) { avPos = pos; break; } }
-      // june and july are inside window (25-50%), may is outside but close, august outside
-      const isInWindow = avPos === 25 || avPos === 50;
-      const isOutWindow = avPos === 0;
-      const avFillClass = isInWindow ? "af-in" : isOutWindow ? "af-out" : avPos >= 0 ? "af-out" : "af-gray";
-      const availBarHtml = `
-        <div class="avail-legend">
-          <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--green)"></div>In window</div>
-          <div class="avail-legend-item"><div class="avail-legend-dot" style="background:#86efac"></div>Available, outside</div>
-          <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--gray-300)"></div>Unknown</div>
-        </div>
-        <div class="avail-bar">
-          <div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div>
-          <div class="avail-track">
-            <div class="avail-window" style="left:25%;width:50%"></div>
-            ${avPos >= 0 ? `<div class="avail-fill ${avFillClass}" style="left:${avPos}%;width:25%"></div>` : `<div class="avail-fill af-gray" style="left:0;width:100%"></div>`}
-          </div>
-        </div>`;
+      const isInWindow = avPos >= 25; // june, july, august
+      const avFillClass = avPos < 0 ? "af-unknown" : isInWindow ? "af-in" : "af-out";
+      const availBarHtml = `<div class="avail-bar"><div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div><div class="avail-track">${avPos >= 0 ? `<div class="avail-fill ${avFillClass}" style="left:${avPos}%;width:25%"></div>` : `<div class="avail-fill af-unknown" style="left:0;width:100%"></div>`}</div></div>`;
 
       return `
 <div class="card score-border-${isRejected ? "none" : sc} ${isNew ? "is-new" : ""} status-${status}"
@@ -776,11 +862,11 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="drawer-section">
     <div class="sb-label">Status</div>
     <div class="fi-group">
-      <button class="fi active" onclick="setFilter('all',this);closeDrawer()">All <span class="fc">${activeListings.length}</span></button>
+      <button class="fi active" onclick="setFilter('all',this);closeDrawer()">🏠 All <span class="fc">${activeListings.length}</span></button>
       <button class="fi" onclick="setFilter('new',this);closeDrawer()">✨ New <span class="fc">${newIds.length}</span></button>
-      <button class="fi" onclick="setFilter('pending',this);closeDrawer()">Needs Review <span class="fc">${statusCounts.pending}</span></button>
-      <button class="fi" onclick="setFilter('contacted',this);closeDrawer()">Contacted <span class="fc">${statusCounts.contacted}</span></button>
-      <button class="fi" onclick="setFilter('skipped',this);closeDrawer()">Passed <span class="fc">${statusCounts.skipped}</span></button>
+      <button class="fi" onclick="setFilter('pending',this);closeDrawer()">👀 Needs Review <span class="fc">${statusCounts.pending}</span></button>
+      <button class="fi" onclick="setFilter('contacted',this);closeDrawer()">📱 Contacted <span class="fc">${statusCounts.contacted}</span></button>
+      <button class="fi" onclick="setFilter('skipped',this);closeDrawer()">👎 Passed <span class="fc">${statusCounts.skipped}</span></button>
       <button class="fi" onclick="setFilter('rejected',this);closeDrawer()">🚫 Rejected <span class="fc">${rejectedListings.length}</span></button>
     </div>
   </div>
@@ -801,6 +887,25 @@ const commentMap = ${JSON.stringify(commentMap)};
 const newIds = ${JSON.stringify(newIds)};
 const avgPrice = ${avgPrice};
 const TARGET_PRICE = ${TARGET_PRICE};
+const PASSWORD = "${PASSWORD}";
+
+// Password gate
+function checkPw() {
+  const val = document.getElementById("pw-input").value;
+  if (val === PASSWORD) {
+    document.getElementById("pw-overlay").style.display = "none";
+    localStorage.setItem("sublet_auth", PASSWORD);
+  } else {
+    document.getElementById("pw-error").style.display = "block";
+    document.getElementById("pw-input").value = "";
+    document.getElementById("pw-input").focus();
+  }
+}
+if (localStorage.getItem("sublet_auth") === PASSWORD) {
+  document.getElementById("pw-overlay").style.display = "none";
+} else {
+  setTimeout(() => document.getElementById("pw-input").focus(), 100);
+}
 
 let currentUser = localStorage.getItem("sublet_user");
 if (currentUser) restoreUser();
@@ -840,6 +945,23 @@ window.addEventListener("load",()=>{
 function openDrawer(){document.getElementById("drawer").classList.add("open");document.getElementById("drawer-overlay").style.display="block";}
 function closeDrawer(){document.getElementById("drawer").classList.remove("open");document.getElementById("drawer-overlay").style.display="none";}
 
+async function sendAllSms() {
+  if (!currentUser) { alert("Select your name from the dropdown first."); return; }
+  const eligible = listings.filter(l => !l.rejected && l.phoneNumbers?.length > 0 && l.drafts?.sms);
+  const contactedIds = new Set(Object.entries(actionMap).filter(([id, acts]) => acts.some(a => a.action === "contacted")).map(([id]) => id));
+  const toSend = eligible.filter(l => !contactedIds.has(l.id));
+  if (toSend.length === 0) { alert("No uncontacted listings with phone numbers found."); return; }
+  if (!confirm(\`Send SMS to \${toSend.length} uncontacted listing\${toSend.length > 1 ? "s" : ""}? This cannot be undone.\`)) return;
+  const btn = document.getElementById("send-all-btn");
+  btn.disabled = true; btn.textContent = "Sending...";
+  try {
+    const res = await fetch("/send-all-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ userName: currentUser }) });
+    const data = await res.json();
+    btn.textContent = \`✓ Sent \${data.sent}\`;
+    setTimeout(() => location.reload(), 1500);
+  } catch(e) { btn.disabled = false; btn.textContent = "📱 Send All SMS"; alert("Failed: " + e.message); }
+}
+
 let panelOpen=false;
 function openPanel(id){
   const l=listings.find(x=>x.id===id);if(!l)return;
@@ -857,7 +979,6 @@ function openPanel(id){
     pdiff+=td<-5?\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(td)}% below target</span>\`:td>5?\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(td)}% above target</span>\`:\`<span style="color:var(--gray-400);font-size:12px">≈ on target</span>\`;
     if(avgPrice>0){const ad=Math.round((price-avgPrice)/avgPrice*100);pdiff+=ad<-5?\` <span style="color:var(--green);font-size:11px">↓ \${Math.abs(ad)}% avg</span>\`:ad>5?\` <span style="color:var(--red);font-size:11px">↑ \${Math.abs(ad)}% avg</span>\`:"";}
   }
-
   let actionBtns="";
   if(!l.rejected){
     if(!ca){
@@ -868,7 +989,6 @@ function openPanel(id){
     if(ra&&!va)actionBtns+=\`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`;
     if(!pa)actionBtns+=\`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`;
   }
-
   document.getElementById("panel").dataset.listingId=id;
   document.getElementById("panel-content").innerHTML=\`
     <div class="ph"><div style="flex:1;min-width:0">
