@@ -609,12 +609,12 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .uopt.active{background:var(--blue-light);color:var(--blue)}
 .uopt-sub{font-size:11px;color:var(--gray-400);font-weight:400;margin-top:1px}
 .hero{background:linear-gradient(135deg,#0070f3 0%,#0051a8 100%);color:white;padding:28px 32px 24px}
-.hero-inner{max-width:none;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.hero-inner{max-width:none;display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:nowrap}
 .hero-left h2{font-size:22px;font-weight:700;letter-spacing:-0.4px;margin-bottom:6px}
 .hero-left p{font-size:14px;opacity:0.85;max-width:480px;line-height:1.5}
 .hero-pills{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 .hero-pill{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:500}
-.hero-right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.hero-right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0}
 .hero-stats{display:flex;gap:20px;align-items:center}
 .hero-stat-block{text-align:center}
 .hero-stat{font-size:32px;font-weight:800;line-height:1}
@@ -840,7 +840,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="hero-inner">
     <div class="hero-left">
       <h2>Manhattan Sublet Search · Summer 2026</h2>
-      <p>Autonomous leasing agent that continuously monitors rental listings, applies AI-driven fit scoring, executes context-aware outreach across multiple channels and delivers daily performance summaries.</p>
+      <p>Autonomous leasing agent that monitors rental listings, scores by fit, executes outreach across multiple channels and delivers daily summaries.</p>
       <div class="hero-pills">
         <span class="hero-pill">🤖 6 platforms scraped every 30 min</span>
         <span class="hero-pill">🧠 AI fit scoring + assessment</span>
