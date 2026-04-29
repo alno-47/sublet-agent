@@ -528,6 +528,8 @@ app.get("/", async (req, res) => {
   const avgPrice = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
   const maxPrice = Math.max(...prices, 10000);
   const lastUpdated = lastFetchTime ? timeAgo(lastFetchTime) : "never";
+  const lastReplyAction = actions.filter(a => a.action === "reply").sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+  const lastReplyAgo = lastReplyAction ? timeAgo(lastReplyAction.created_at) : null;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const todayCount = activeListings.filter(l => new Date(l.datetime) >= today).length;
 
@@ -609,7 +611,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .hero{background:linear-gradient(135deg,#0070f3 0%,#0051a8 100%);color:white;padding:28px 32px 24px}
 .hero-inner{max-width:none;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap}
 .hero-left h2{font-size:22px;font-weight:700;letter-spacing:-0.4px;margin-bottom:6px}
-.hero-left p{font-size:14px;opacity:0.85;max-width:520px;line-height:1.6}
+.hero-left p{font-size:14px;opacity:0.85;max-width:520px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .hero-pills{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
 .hero-pill{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.25);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:500}
 .hero-right{text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
@@ -803,6 +805,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="pw-logo">${LOGO_SVG}</div>
     <div class="pw-title">Summer Sublet Agent</div>
     <div class="pw-sub">Enter password to continue</div>
+    <div style="font-size:11px;color:var(--gray-300);margin-bottom:12px">Demo access: dsail</div>
     <input class="pw-input" type="password" id="pw-input" placeholder="••••••" onkeydown="if(event.key==='Enter')checkPw()">
     <button class="pw-btn" onclick="checkPw()">Unlock</button>
     <div class="pw-error" id="pw-error">Incorrect password</div>
@@ -839,11 +842,12 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       <h2>Manhattan Sublet Search · Summer 2026</h2>
       <p>Autonomous leasing agent that continuously monitors rental listings, applies AI-driven fit scoring, executes context-aware outreach across multiple channels and delivers daily performance summaries.</p>
       <div class="hero-pills">
-        <span class="hero-pill">🤖 Auto-scraped every 30 min</span>
-        <span class="hero-pill">✍️ AI-drafted messages</span>
-        <span class="hero-pill">📱 Auto SMS outreach</span>
+        <span class="hero-pill">🤖 6 platforms scraped every 30 min</span>
+        <span class="hero-pill">🧠 AI fit scoring + assessment</span>
+        <span class="hero-pill">📱 Automated SMS with A/B testing</span>
+        <span class="hero-pill">💬 Reply detection &amp; chat threads</span>
         <span class="hero-pill">👥 Shared team workspace</span>
-        <span class="hero-pill">📧 Daily email summary</span>
+        <span class="hero-pill">📧 Daily performance summary</span>
       </div>
     </div>
     <div class="hero-right">
@@ -859,6 +863,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
         </div>
       </div>
       <div class="last-updated">Last updated: ${lastUpdated}</div>
+      ${lastReplyAgo ? `<div class="last-updated" style="opacity:0.85;color:#86efac">💬 Last reply: ${lastReplyAgo}</div>` : ""}
     </div>
   </div>
 </div>
@@ -959,7 +964,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       <span style="font-size:11px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.5px;margin-right:4px">Availability:</span>
       <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--green)"></div>Available during search period</div>
       <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--green-light)"></div>Available outside search period</div>
-      <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--gray-300)"></div>Unknown</div>
+      <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--gray-300)"></div>Unknown (assumed available)</div>
     </div>
     <div id="cards-container">
     ${allListings.length === 0 ? `<div class="skeleton-list">${[1,2,3].map(()=>`<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-body"><div class="skeleton-line wide"></div><div class="skeleton-line medium"></div><div class="skeleton-line short"></div><div class="skeleton-line medium"></div></div></div>`).join("")}</div>` :
@@ -987,11 +992,12 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
         priceDiff = tl + al;
       }
       const avStr = (l.availableFrom || "").toLowerCase();
-      const monthPos = { may: 0, june: 25, july: 50, august: 75 };
+      const monthPos = { may: 0, jun: 25, jul: 50, aug: 75 };
       let avPos = -1;
       for (const [mon, pos] of Object.entries(monthPos)) { if (avStr.includes(mon)) { avPos = pos; break; } }
-      const avFillClass = avPos < 0 ? "af-unknown" : avPos >= 25 ? "af-in" : "af-out";
-      const availBarHtml = `<div class="avail-bar"><div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div><div class="avail-track">${avPos >= 0 ? `<div class="avail-fill ${avFillClass}" style="left:${avPos}%;width:25%"></div>` : `<div class="avail-fill af-unknown" style="left:0;width:100%"></div>`}</div></div>`;
+      const avFillClass = avPos < 0 ? "af-in" : avPos >= 25 ? "af-in" : "af-out";
+      const avLeft = avPos < 0 ? 25 : avPos;
+      const availBarHtml = `<div class="avail-bar"><div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div><div class="avail-track"><div class="avail-fill ${avFillClass}" style="left:${avLeft}%;width:25%"></div></div></div>`;
 
       return `
 <div class="card score-border-${isRejected ? "none" : sc} ${isNew ? "is-new" : ""} status-${status}"
