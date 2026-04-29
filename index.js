@@ -23,11 +23,8 @@ function passes(listing) {
 }
 
 async function fetchRssListings() {
-  const res = await fetch("https://newyork.craigslist.org/search/sub?format=rss", {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-  });
+  const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent("https://newyork.craigslist.org/search/sub?format=rss")}`;
+  const res = await fetch(proxyUrl);
   const xml = await res.text();
   console.log("RSS fetch status:", res.status);
 
