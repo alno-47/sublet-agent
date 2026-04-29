@@ -28,14 +28,6 @@ const APARTMENT_PHOTOS = [
   "https://images.unsplash.com/photo-1554995207-c18c203602cb?w=600&q=80",
 ];
 
-function formatTitle(slug) {
-  return slug
-    .replace(/\d+\.html$/, "")
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, c => c.toUpperCase())
-    .trim();
-}
-
 function timeAgo(date) {
   if (!date) return null;
   const s = Math.floor((Date.now() - new Date(date)) / 1000);
@@ -43,6 +35,80 @@ function timeAgo(date) {
   if (s < 3600) return Math.floor(s / 60) + "m ago";
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
+}
+
+function getText(html, tag) {
+  const m = html.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, "i"));
+  return m ? m[1].replace(/<[^>]+>/g, "").trim() : "";
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function fetchListingDetail(url, idx) {
+  try {
+    await sleep(300 + Math.random() * 400); // polite delay
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://newyork.craigslist.org/search/mnh/sub"
+      }
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // Title
+    const titleMatch = html.match(/<span\s+id="titletextonly"[^>]*>([\s\S]*?)<\/span>/i) ||
+                       html.match(/<h1[^>]*class="[^"]*postingtitle[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
+    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "";
+
+    // Price
+    const priceMatch = html.match(/class="[^"]*price[^"]*"[^>]*>\s*(\$[\d,]+)/i) ||
+                       html.match(/(\$[\d,]+)\s*(?:\/mo|per month)?/i);
+    const price = priceMatch ? priceMatch[1] : "";
+
+    // Body text
+    const bodyMatch = html.match(/<section\s+id="postingbody"[^>]*>([\s\S]*?)<\/section>/i);
+    const post = bodyMatch ? bodyMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 800) : "";
+
+    // Bedrooms
+    const brMatch = (title + " " + post).match(/(\d)\s*b(?:r|ed(?:room)?s?)/i);
+    const bedrooms = brMatch ? parseInt(brMatch[1]) : 2;
+
+    // Location/neighborhood
+    const locMatch = html.match(/class="[^"]*mapaddress[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i) ||
+                     html.match(/<small[^>]*>\(([^)]+)\)<\/small>/i);
+    const location = locMatch ? locMatch[1].replace(/<[^>]+>/g, "").trim() : "Manhattan, NY";
+
+    // Available from
+    const availMatch = post.match(/avail(?:able)?(?:\s+(?:starting|from|on|beginning))?\s+([a-z]+\s+\d+|\d+\/\d+)/i) ||
+                       html.match(/available\s+([a-z]+ \d+)/i);
+    const availableFrom = availMatch ? "available " + availMatch[1].toLowerCase() : "";
+
+    // Phone numbers
+    const phoneMatches = html.match(/\+?1?\s*[-.]?\s*\(?\d{3}\)?\s*[-.]?\s*\d{3}\s*[-.]?\s*\d{4}/g) || [];
+    const phoneNumbers = [...new Set(phoneMatches)].slice(0, 2);
+
+    // Amenities from attrs
+    const amenities = [];
+    const attrMatches = html.matchAll(/class="[^"]*laundry_[^"]*"|class="[^"]*parking_[^"]*"|class="[^"]*cats_ok[^"]*"|class="[^"]*dogs_ok[^"]*"|class="[^"]*is_furnished[^"]*"|class="[^"]*air_conditioning[^"]*"|class="[^"]*no_smoking[^"]*"/gi);
+    const amenityMap = { laundry: "laundry", parking: "parking", cats_ok: "cats OK", dogs_ok: "dogs OK", is_furnished: "furnished", air_conditioning: "A/C", no_smoking: "no smoking" };
+    for (const m of attrMatches) { for (const [k, v] of Object.entries(amenityMap)) { if (m[0].includes(k)) amenities.push(v); } }
+
+    // Also scrape span.shared-line-bubble for amenities
+    const bubbles = html.matchAll(/<span\s+class="shared-line-bubble"[^>]*>([\s\S]*?)<\/span>/gi);
+    for (const b of bubbles) { const t = b[1].replace(/<[^>]+>/g, "").trim(); if (t && !amenities.includes(t)) amenities.push(t); }
+
+    // Images
+    const imgMatches = html.matchAll(/https:\/\/images\.craigslist\.org\/[^"'\s]+_600x450\.jpg/g);
+    const pics = [...new Set([...imgMatches].map(m => m[0]))].slice(0, 3);
+
+    return { title, price, post, bedrooms, location, availableFrom, phoneNumbers, amenities, pics };
+  } catch (e) {
+    console.error(`Failed to fetch ${url}:`, e.message);
+    return null;
+  }
 }
 
 async function initDb() {
@@ -111,6 +177,7 @@ function passes(l) {
 }
 
 async function fetchListings() {
+  console.log("Fetching listing index...");
   const res = await fetch("https://newyork.craigslist.org/search/mnh/sub?min_bedrooms=2&max_bedrooms=3", {
     headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "Accept": "text/html" }
   });
@@ -118,21 +185,50 @@ async function fetchListings() {
   const pat = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
   let m; const links = [];
   while ((m = pat.exec(html)) !== null) { if (!links.includes(m[1])) links.push(m[1]); }
-  return links.slice(0, 50).map((link, i) => {
+  console.log(`Found ${links.length} listing links, fetching details for up to 20...`);
+
+  const items = [];
+  for (let i = 0; i < Math.min(links.length, 20); i++) {
+    const link = links[i];
     const id = (link.match(/(\d+)\.html/) || [])[1] || Math.random().toString(36).slice(2);
-    const rawTitle = link.split("/").pop();
-    const title = formatTitle(rawTitle);
-    const sur = html.slice(Math.max(0, html.indexOf(link) - 200), html.indexOf(link) + 200);
-    const pm = sur.match(/\$[\d,]+/);
-    return { id, title, url: link, post: "", price: pm ? pm[0] : "", bedrooms: 2, location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(), phoneNumbers: [], platform: "Craigslist", address: { city: "New York" }, pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] };
-  });
+    console.log(`Fetching listing ${i + 1}/20: ${id}`);
+    const detail = await fetchListingDetail(link, i);
+    if (detail && detail.title) {
+      items.push({
+        id,
+        title: detail.title,
+        url: link,
+        post: detail.post,
+        price: detail.price,
+        bedrooms: detail.bedrooms,
+        location: detail.location || "Manhattan, NY",
+        availableFrom: detail.availableFrom,
+        datetime: new Date().toISOString(),
+        phoneNumbers: detail.phoneNumbers || [],
+        amenities: detail.amenities || [],
+        platform: "Craigslist",
+        address: { city: "New York" },
+        pics: detail.pics?.length ? detail.pics : [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]],
+      });
+    } else {
+      // fallback with placeholder title
+      items.push({
+        id, title: "Manhattan Sublet", url: link, post: "", price: "", bedrooms: 2,
+        location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(),
+        phoneNumbers: [], amenities: [], platform: "Craigslist", address: { city: "New York" },
+        pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]],
+      });
+    }
+  }
+  console.log(`Successfully fetched details for ${items.length} listings`);
+  return items;
 }
 
 async function generateDraftAndScore(l) {
-  const system = `You help three HBS students (Alex, Julian, Nora from Germany/Austria) find a 2-3BR Manhattan sublet for June–August 2026. Return ONLY valid JSON: {"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence"}. Score 1-10 strictly.`;
+  const system = `You help three HBS students (Alex, Julian, Nora from Germany/Austria) find a 2-3BR Manhattan sublet for June–August 2026. Return ONLY valid JSON: {"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence"}. Score 1-10 strictly on price ($4-8k/mo), location, June availability, furnished status.`;
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST", headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system, messages: [{ role: "user", content: `Title: ${l.title}\nPrice: ${l.price}\nLocation: ${l.location}\nBedrooms: ${l.bedrooms}\nAvailable: ${l.availableFrom}` }] })
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system, messages: [{ role: "user", content: `Title: ${l.title}\nPrice: ${l.price}\nLocation: ${l.location}\nBedrooms: ${l.bedrooms}\nAvailable: ${l.availableFrom}\nDescription: ${(l.post || "").slice(0, 400)}\nAmenities: ${(l.amenities || []).join(", ")}` }] })
   });
   const data = await res.json();
   return JSON.parse((data.content?.[0]?.text || "{}").replace(/```json|```/g, "").trim());
@@ -158,7 +254,7 @@ async function fetchAndProcess() {
     const existing = await loadListings();
     const seen = new Set(existing.map(l => l.id));
     const newListings = eligible.filter(l => !seen.has(l.id));
-    console.log(`${newListings.length} new listings`);
+    console.log(`${newListings.length} new listings after filtering`);
     for (const l of newListings) {
       try { const r = await generateDraftAndScore(l); l.drafts = { inApp: r.inApp, email: r.email, sms: r.sms, whatsapp: r.whatsapp }; l.score = r.score; l.scoreReason = r.scoreReason; } catch (e) { console.error("Draft failed:", e.message); }
       if (l.phoneNumbers?.length > 0 && l.drafts) { const r = await sendSms(l.phoneNumbers[0], l.drafts.sms); l.smsSent = !r?.dryRun; l.smsDryRun = r?.dryRun || false; } else { l.needsManualSend = true; }
@@ -212,8 +308,6 @@ app.get("/", async (req, res) => {
   --sh-lg:0 8px 30px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.06);
 }
 body{font-family:'Inter',sans-serif;background:var(--gray-50);color:var(--gray-900);min-height:100vh;font-size:14px;line-height:1.5}
-
-/* NAV */
 nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;box-shadow:var(--sh-sm)}
 .nav-brand{display:flex;align-items:center;gap:10px}
 .nav-logo{font-size:24px;line-height:1}
@@ -234,8 +328,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .uopt:hover{background:var(--gray-50)}
 .uopt.active{background:var(--blue-light);color:var(--blue)}
 .uopt-sub{font-size:11px;color:var(--gray-400);font-weight:400;margin-top:1px}
-
-/* HERO BANNER */
 .hero{background:linear-gradient(135deg,#0070f3 0%,#0051a8 100%);color:white;padding:28px 32px 24px}
 .hero-inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap}
 .hero-left h2{font-size:22px;font-weight:700;letter-spacing:-0.4px;margin-bottom:6px}
@@ -246,11 +338,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .hero-stat{font-size:32px;font-weight:800;line-height:1}
 .hero-stat-lbl{font-size:12px;opacity:0.75;margin-top:2px}
 .last-updated{font-size:11px;opacity:0.6;margin-top:6px}
-
-/* LAYOUT */
 .layout{display:grid;grid-template-columns:272px 1fr;min-height:calc(100vh - 60px - 130px)}
-
-/* SIDEBAR */
 .sidebar{background:var(--white);border-right:1px solid var(--gray-200);padding:20px 18px;position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto}
 .sb-section{margin-bottom:22px}
 .sb-label{font-size:11px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px}
@@ -276,27 +364,19 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .sort-sel{width:100%;padding:7px 10px;border:1px solid var(--gray-200);border-radius:var(--r-sm);background:var(--white);font-family:'Inter',sans-serif;font-size:13px;color:var(--gray-700);cursor:pointer}
 .kb-hint{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--r);padding:10px 12px;font-size:11px;color:var(--gray-400);line-height:2}
 .kb-key{display:inline-block;background:var(--white);border:1px solid var(--gray-300);border-radius:4px;padding:1px 5px;font-size:11px;font-weight:600;color:var(--gray-600);box-shadow:0 1px 0 var(--gray-300);margin-right:3px}
-
-/* MAIN */
 .main-content{padding:20px 24px}
 .main-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 .results-lbl{font-size:13px;color:var(--gray-400)}
 .results-lbl strong{color:var(--gray-900)}
 .refresh-btn{height:32px;padding:0 12px;border-radius:var(--r-sm);border:1px solid var(--gray-200);background:var(--white);cursor:pointer;font-size:12px;font-family:'Inter',sans-serif;color:var(--gray-500);display:flex;align-items:center;gap:5px;transition:all 0.12s}
 .refresh-btn:hover{border-color:var(--blue);color:var(--blue)}
-
-/* SKELETON */
 .skeleton-list{display:flex;flex-direction:column;gap:12px}
 .skeleton-card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;display:grid;grid-template-columns:220px 1fr;min-height:165px}
 .skeleton-img{background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-200) 50%,var(--gray-100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite}
 .skeleton-body{padding:16px;display:flex;flex-direction:column;gap:10px;justify-content:center}
 .skeleton-line{height:12px;background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-200) 50%,var(--gray-100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px}
-.skeleton-line.wide{width:75%}
-.skeleton-line.medium{width:50%}
-.skeleton-line.short{width:35%}
+.skeleton-line.wide{width:75%}.skeleton-line.medium{width:50%}.skeleton-line.short{width:35%}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-
-/* CARD */
 .card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;margin-bottom:10px;cursor:pointer;transition:box-shadow 0.2s,border-color 0.2s;display:grid;grid-template-columns:220px 1fr;min-height:165px;border-left-width:4px}
 .card:hover{box-shadow:var(--sh-lg);border-color:var(--gray-300)}
 .card.score-border-high{border-left-color:var(--green)}
@@ -340,8 +420,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .tag-amber{background:var(--amber-bg);color:var(--amber)}
 .tag-purple{background:var(--purple-bg);color:var(--purple)}
 .tag-red{background:var(--red-bg);color:var(--red)}
-
-/* PANEL */
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:300;opacity:0;pointer-events:none;transition:opacity 0.25s;backdrop-filter:blur(2px)}
 .overlay.open{opacity:1;pointer-events:all}
 .panel{position:fixed;top:0;right:0;height:100vh;width:520px;max-width:100vw;background:var(--white);z-index:400;transform:translateX(100%);transition:transform 0.3s cubic-bezier(0.32,0.72,0,1);overflow-y:auto;box-shadow:var(--sh-lg)}
@@ -391,8 +469,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .map-btn:hover{text-decoration:underline}
 .amen-list{display:flex;flex-wrap:wrap;gap:4px}
 .amen{font-size:11px;padding:2px 8px;border-radius:var(--r-sm);background:var(--gray-100);color:var(--gray-600);border:1px solid var(--gray-200)}
-
-/* MOBILE FILTER DRAWER */
 .mobile-filter-btn{display:none;position:fixed;bottom:24px;right:24px;z-index:250;background:var(--blue);color:white;border:none;border-radius:20px;padding:10px 18px;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;box-shadow:var(--sh-lg);align-items:center;gap:6px}
 .drawer-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:260;display:none;backdrop-filter:blur(2px)}
 .drawer{position:fixed;bottom:0;left:0;right:0;background:var(--white);z-index:270;border-radius:20px 20px 0 0;padding:20px 20px 40px;max-height:80vh;overflow-y:auto;transform:translateY(100%);transition:transform 0.3s cubic-bezier(0.32,0.72,0,1)}
@@ -400,10 +476,8 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .drawer-handle{width:40px;height:4px;background:var(--gray-300);border-radius:2px;margin:0 auto 20px}
 .drawer-title{font-size:15px;font-weight:600;margin-bottom:16px}
 .drawer-section{margin-bottom:20px}
-
 .empty{text-align:center;padding:80px 20px;color:var(--gray-400)}
 .empty h3{font-size:18px;color:var(--gray-700);margin-bottom:8px}
-
 @media(max-width:768px){
   .layout{grid-template-columns:1fr}
   .sidebar{display:none}
@@ -418,7 +492,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 </style>
 </head>
 <body>
-
 <nav>
   <div class="nav-brand">
     <div class="nav-logo">🤝</div>
@@ -464,7 +537,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 </div>
 
 <div class="layout">
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar">
     <div class="stats-grid">
       <div class="scard hi"><div class="sval" id="s-new">${newIds.length}</div><div class="slbl">New</div></div>
       <div class="scard"><div class="sval" id="s-total">${listings.length}</div><div class="slbl">Total</div></div>
@@ -473,7 +546,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     </div>
     <div class="sb-section">
       <div class="sb-label">Status</div>
-      <div class="fi-group" id="filter-group">
+      <div class="fi-group">
         <button class="fi active" onclick="setFilter('all',this)">All listings <span class="fc">${listings.length}</span></button>
         <button class="fi" onclick="setFilter('new',this)">✨ New <span class="fc">${newIds.length}</span></button>
         <button class="fi" onclick="setFilter('pending',this)">Pending</button>
@@ -485,7 +558,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     </div>
     <div class="sb-section">
       <div class="sb-label">Neighborhood</div>
-      <div class="hood-grid" id="hood-group">
+      <div class="hood-grid">
         <button class="hbtn active" onclick="toggleHood('all',this)">All</button>
         <button class="hbtn" onclick="toggleHood('upper east',this)">UES</button>
         <button class="hbtn" onclick="toggleHood('upper west',this)">UWS</button>
@@ -517,35 +590,20 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="sb-section">
       <div class="sb-label">Keyboard shortcuts</div>
       <div class="kb-hint">
-        <span class="kb-key">↑↓</span> Navigate<br>
-        <span class="kb-key">Enter</span> Open<br>
-        <span class="kb-key">Esc</span> Close<br>
-        <span class="kb-key">C</span> Contacted · <span class="kb-key">P</span> Pass
+        <span class="kb-key">↑↓</span> Navigate · <span class="kb-key">Enter</span> Open<br>
+        <span class="kb-key">Esc</span> Close · <span class="kb-key">C</span> Contact · <span class="kb-key">P</span> Pass
       </div>
     </div>
   </aside>
 
   <main class="main-content">
     <div class="main-hdr">
-      <div class="results-lbl"><strong id="results-count">${listings.length} listings</strong> · avg $${avgPrice.toLocaleString()}/mo · updated ${lastUpdated}</div>
+      <div class="results-lbl"><strong id="results-count">${listings.length} listings</strong>${avgPrice ? ` · avg $${avgPrice.toLocaleString()}/mo` : ""} · updated ${lastUpdated}</div>
       <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
     </div>
-
     <div id="cards-container">
-    ${listings.length === 0 ? `
-      <div class="skeleton-list">
-        ${[1,2,3].map(() => `
-        <div class="skeleton-card">
-          <div class="skeleton-img"></div>
-          <div class="skeleton-body">
-            <div class="skeleton-line wide"></div>
-            <div class="skeleton-line medium"></div>
-            <div class="skeleton-line short"></div>
-            <div class="skeleton-line medium"></div>
-          </div>
-        </div>`).join("")}
-      </div>
-    ` : listings.map((l, idx) => {
+    ${listings.length === 0 ? `<div class="skeleton-list">${[1,2,3].map(()=>`<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-body"><div class="skeleton-line wide"></div><div class="skeleton-line medium"></div><div class="skeleton-line short"></div><div class="skeleton-line medium"></div></div></div>`).join("")}</div>` :
+    listings.map((l) => {
       const la = actionMap[l.id] || [];
       const isNew = newIds.includes(l.id);
       const ca = la.find(a => a.action === "contacted");
@@ -588,7 +646,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="card-body">
     <div>
       <div class="card-row1">
-        <div class="card-title">${(l.title || "Untitled listing").slice(0, 55)}</div>
+        <div class="card-title">${(l.title || "Manhattan Sublet").slice(0, 60)}</div>
         <div class="card-price-wrap">
           ${l.price ? `<div class="card-price">${l.price}</div>` : ""}
           ${priceDiff}
@@ -597,12 +655,13 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       <div class="card-meta">
         <span>📍 ${l.location || "Manhattan"}</span>
         ${l.bedrooms ? `<span>🛏 ${l.bedrooms}BR</span>` : ""}
+        ${l.availableFrom ? `<span>📅 ${l.availableFrom}</span>` : ""}
       </div>
       ${l.scoreReason ? `<div class="card-score-reason">${l.scoreReason}</div>` : ""}
       ${availBarHtml}
     </div>
     <div class="card-bottom">
-      <div class="card-tags"><span class="tag tag-gray">${l.platform || "Craigslist"}</span>${l.smsSent ? `<span class="tag tag-green">SMS ✓</span>` : ""}</div>
+      <div class="card-tags"><span class="tag tag-gray">${l.platform || "Craigslist"}</span>${l.smsSent ? `<span class="tag tag-green">SMS ✓</span>` : ""}${l.amenities?.includes("furnished") ? `<span class="tag tag-blue">Furnished</span>` : ""}</div>
       <div>${statusTag}</div>
     </div>
   </div>
@@ -612,7 +671,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   </main>
 </div>
 
-<!-- Mobile filter button + drawer -->
 <button class="mobile-filter-btn" onclick="openDrawer()">⚙ Filters</button>
 <div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
 <div class="drawer" id="drawer">
@@ -621,41 +679,17 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="drawer-section">
     <div class="sb-label">Status</div>
     <div class="fi-group">
-      <button class="fi active" onclick="setFilter('all',this);closeDrawer()">All listings <span class="fc">${listings.length}</span></button>
-      <button class="fi" onclick="setFilter('new',this);closeDrawer()">✨ New <span class="fc">${newIds.length}</span></button>
+      <button class="fi active" onclick="setFilter('all',this);closeDrawer()">All <span class="fc">${listings.length}</span></button>
+      <button class="fi" onclick="setFilter('new',this);closeDrawer()">✨ New</button>
       <button class="fi" onclick="setFilter('pending',this);closeDrawer()">Pending</button>
       <button class="fi" onclick="setFilter('contacted',this);closeDrawer()">Contacted</button>
-      <button class="fi" onclick="setFilter('reply',this);closeDrawer()">💬 Got reply</button>
-      <button class="fi" onclick="setFilter('viewing',this);closeDrawer()">📅 Viewing</button>
       <button class="fi" onclick="setFilter('skipped',this);closeDrawer()">Passed</button>
-    </div>
-  </div>
-  <div class="drawer-section">
-    <div class="sb-label">Neighborhood</div>
-    <div class="hood-grid">
-      <button class="hbtn active" onclick="toggleHood('all',this);closeDrawer()">All</button>
-      <button class="hbtn" onclick="toggleHood('upper east',this);closeDrawer()">UES</button>
-      <button class="hbtn" onclick="toggleHood('upper west',this);closeDrawer()">UWS</button>
-      <button class="hbtn" onclick="toggleHood('midtown',this);closeDrawer()">Midtown</button>
-      <button class="hbtn" onclick="toggleHood('village',this);closeDrawer()">Village</button>
-      <button class="hbtn" onclick="toggleHood('soho',this);closeDrawer()">SoHo</button>
-      <button class="hbtn" onclick="toggleHood('tribeca',this);closeDrawer()">Tribeca</button>
-      <button class="hbtn" onclick="toggleHood('financial',this);closeDrawer()">FiDi</button>
     </div>
   </div>
   <div class="drawer-section">
     <div class="sb-label">Max price</div>
     <div class="price-val" id="price-lbl-m">$${maxPrice.toLocaleString()}/mo</div>
     <input type="range" min="1000" max="${maxPrice}" value="${maxPrice}" step="100" style="width:100%;accent-color:var(--blue)" oninput="updatePrice(this.value,true)">
-  </div>
-  <div class="drawer-section">
-    <div class="sb-label">Sort by</div>
-    <select class="sort-sel" onchange="document.getElementById('sort-sel').value=this.value;sortCards();closeDrawer()">
-      <option value="newest">Newest first</option>
-      <option value="score">Best match score</option>
-      <option value="price-low">Price: low to high</option>
-      <option value="price-high">Price: high to low</option>
-    </select>
   </div>
 </div>
 
@@ -669,48 +703,34 @@ const commentMap = ${JSON.stringify(commentMap)};
 const newIds = ${JSON.stringify(newIds)};
 const avgPrice = ${avgPrice};
 
-// User
 let currentUser = localStorage.getItem("sublet_user");
 if (currentUser) restoreUser();
 function restoreUser() {
-  const cm = {Alex:"",Julian:"j",Nora:"n",Marco:"m"};
-  const cl = cm[currentUser]||"";
-  document.getElementById("nav-lbl").textContent = currentUser;
-  const av = document.getElementById("nav-av");
-  av.textContent = currentUser[0]; av.className="uav"+(cl?" "+cl:""); av.style.display="flex";
+  const cm={Alex:"",Julian:"j",Nora:"n",Marco:"m"};const cl=cm[currentUser]||"";
+  document.getElementById("nav-lbl").textContent=currentUser;
+  const av=document.getElementById("nav-av");
+  av.textContent=currentUser[0];av.className="uav"+(cl?" "+cl:"");av.style.display="flex";
   document.getElementById("ubtn").classList.add("has-user");
 }
-function toggleDD() { document.getElementById("umenu").classList.toggle("open"); document.getElementById("ubtn").classList.toggle("open"); }
-function setUser(name,init,cl) {
-  currentUser=name; localStorage.setItem("sublet_user",name);
+function toggleDD(){document.getElementById("umenu").classList.toggle("open");document.getElementById("ubtn").classList.toggle("open");}
+function setUser(name,init,cl){
+  currentUser=name;localStorage.setItem("sublet_user",name);
   document.getElementById("nav-lbl").textContent=name;
   const av=document.getElementById("nav-av");
-  av.textContent=init; av.className="uav"+(cl?" "+cl:""); av.style.display="flex";
+  av.textContent=init;av.className="uav"+(cl?" "+cl:"");av.style.display="flex";
   document.getElementById("ubtn").classList.add("has-user");
   document.querySelectorAll(".uopt").forEach(o=>o.classList.remove("active"));
   event.currentTarget.classList.add("active");
   document.getElementById("umenu").classList.remove("open");
   document.getElementById("ubtn").classList.remove("open");
 }
-document.addEventListener("click", e => {
-  if (!document.getElementById("uwrap").contains(e.target)) {
-    document.getElementById("umenu").classList.remove("open");
-    document.getElementById("ubtn").classList.remove("open");
-  }
-});
+document.addEventListener("click",e=>{if(!document.getElementById("uwrap").contains(e.target)){document.getElementById("umenu").classList.remove("open");document.getElementById("ubtn").classList.remove("open");}});
 
-// Mark seen
-if (newIds.length>0) setTimeout(()=>{ fetch("/seen",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingIds:newIds,userName:localStorage.getItem("sublet_user")||"unknown"})}); },3000);
+if(newIds.length>0)setTimeout(()=>{fetch("/seen",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingIds:newIds,userName:localStorage.getItem("sublet_user")||"unknown"})});},3000);
 
-// Animated counters
-function animCount(el,target) {
-  const dur=700,start=performance.now();
-  function step(now){const p=Math.min((now-start)/dur,1);const e=1-Math.pow(1-p,3);el.textContent=Math.round(target*e);if(p<1)requestAnimationFrame(step);}
-  requestAnimationFrame(step);
-}
+function animCount(el,target){const dur=700,start=performance.now();function step(now){const p=Math.min((now-start)/dur,1);const e=1-Math.pow(1-p,3);el.textContent=Math.round(target*e);if(p<1)requestAnimationFrame(step);}requestAnimationFrame(step);}
 window.addEventListener("load",()=>{
-  const cards=document.querySelectorAll(".card");
-  let pending=0,contacted=0;
+  const cards=document.querySelectorAll(".card");let pending=0,contacted=0;
   cards.forEach(c=>{if(c.dataset.status==="pending")pending++;if(["contacted","reply","viewing"].includes(c.dataset.status))contacted++;});
   animCount(document.getElementById("s-new"),${newIds.length});
   animCount(document.getElementById("s-total"),${listings.length});
@@ -718,13 +738,11 @@ window.addEventListener("load",()=>{
   animCount(document.getElementById("s-contacted"),contacted);
 });
 
-// Mobile drawer
 function openDrawer(){document.getElementById("drawer").classList.add("open");document.getElementById("drawer-overlay").style.display="block";}
 function closeDrawer(){document.getElementById("drawer").classList.remove("open");document.getElementById("drawer-overlay").style.display="none";}
 
-// Panel
 let panelOpen=false;
-function openPanel(id) {
+function openPanel(id){
   const l=listings.find(x=>x.id===id);if(!l)return;
   const la=actionMap[id]||[],lc=commentMap[id]||[];
   const ca=la.find(a=>a.action==="contacted"),ra=la.find(a=>a.action==="reply");
@@ -732,26 +750,21 @@ function openPanel(id) {
   const sc=(l.score||0)>=7?"high":(l.score||0)>=5?"mid":"low";
   const ta=t=>{const s=Math.floor((Date.now()-new Date(t))/1000);if(s<60)return"just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return Math.floor(s/86400)+"d ago";};
   const avCls=n=>n==="Julian"?"j":n==="Nora"?"n":n==="Marco"?"m":"";
-  const pm=(l.price||"").replace(/,/g,"").match(/\\d+/);
-  const price=pm?parseInt(pm[0]):0;
-  let pdiff="";
-  if(price>0&&avgPrice>0){const d=Math.round((price-avgPrice)/avgPrice*100);if(d<-5)pdiff=\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(d)}% below avg</span>\`;else if(d>5)pdiff=\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(d)}% above avg</span>\`;}
+  const pm=(l.price||"").replace(/,/g,"").match(/\\d+/);const price=pm?parseInt(pm[0]):0;
+  let pdiff="";if(price>0&&avgPrice>0){const d=Math.round((price-avgPrice)/avgPrice*100);if(d<-5)pdiff=\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(d)}% below avg</span>\`;else if(d>5)pdiff=\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(d)}% above avg</span>\`;}
   document.getElementById("panel").dataset.listingId=id;
   document.getElementById("panel-content").innerHTML=\`
-    <div class="ph">
-      <div style="flex:1;min-width:0">
-        <div class="ptitle">\${(l.title||"Untitled").replace(/</g,"&lt;")}</div>
-        \${l.price?\`<div class="pprice">\${l.price}<span style="font-size:12px;font-weight:400;color:var(--gray-400)">/mo</span> \${pdiff}</div>\`:""}
-        <div class="pmeta">📍 \${l.location||"Manhattan"}\${l.bedrooms?" · 🛏 "+l.bedrooms+"BR":""}\${l.availableFrom?" · 📅 "+l.availableFrom:""}</div>
-      </div>
-      <button class="pclose" onclick="closePanel()">✕</button>
-    </div>
+    <div class="ph"><div style="flex:1;min-width:0">
+      <div class="ptitle">\${(l.title||"Manhattan Sublet").replace(/</g,"&lt;")}</div>
+      \${l.price?\`<div class="pprice">\${l.price}<span style="font-size:12px;font-weight:400;color:var(--gray-400)">/mo</span> \${pdiff}</div>\`:""}
+      <div class="pmeta">📍 \${l.location||"Manhattan"}\${l.bedrooms?" · 🛏 "+l.bedrooms+"BR":""}\${l.availableFrom?" · 📅 "+l.availableFrom:""}</div>
+    </div><button class="pclose" onclick="closePanel()">✕</button></div>
     \${l.pics?.[0]?\`<img class="pimg" src="\${l.pics[0]}" alt="">\`:""}
     <div class="pbody">
       \${l.score?\`<div class="ps"><div class="ps-title">Match Score</div><div style="display:flex;align-items:center;gap:12px;padding:11px;background:var(--gray-50);border-radius:var(--r);border:1px solid var(--gray-200)"><span class="score-float sf-\${sc}" style="position:static;font-size:15px;padding:5px 13px">\${l.score}/10</span><span style="font-size:13px;color:var(--gray-500);font-style:italic">\${l.scoreReason||""}</span></div></div>\`:""}
       \${l.post?\`<div class="ps"><div class="ps-title">Description</div><p style="font-size:13px;color:var(--gray-600);line-height:1.7">\${l.post.slice(0,600).replace(/</g,"&lt;")}</p></div>\`:""}
       \${l.amenities?.length?\`<div class="ps"><div class="ps-title">Amenities</div><div class="amen-list">\${l.amenities.map(a=>\`<span class="amen">\${a}</span>\`).join("")}</div></div>\`:""}
-      <div class="ps"><a class="map-btn" href="https://maps.google.com?q=\${encodeURIComponent((l.address?.street||l.location||"Manhattan")+" New York NY")}" target="_blank">🗺 View on Google Maps →</a></div>
+      <div class="ps"><a class="map-btn" href="https://maps.google.com?q=\${encodeURIComponent((l.location||"Manhattan")+" New York NY")}" target="_blank">🗺 View on Google Maps →</a></div>
       \${l.drafts?\`<div class="ps"><div class="ps-title">Message Drafts</div><div class="dtabs"><button class="dtab active" onclick="showDraft('inApp',this)">In-app</button><button class="dtab" onclick="showDraft('email',this)">Email</button><button class="dtab" onclick="showDraft('sms',this)">SMS</button><button class="dtab" onclick="showDraft('whatsapp',this)">WhatsApp</button></div><div id="dp-inApp" class="dpane active"><div class="dbox"><textarea class="dta">\${(l.drafts.inApp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-email" class="dpane"><div class="dsubj"><strong>Subject:</strong> \${(l.drafts.email?.subject||"").replace(/</g,"&lt;")}</div><div class="dbox"><textarea class="dta">\${(l.drafts.email?.body||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-sms" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.sms||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-whatsapp" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.whatsapp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div></div>\`:""}
       <div class="ps"><div class="ps-title">Outreach Status</div>
         <div class="abtns">
@@ -771,41 +784,14 @@ function openPanel(id) {
   \`;
   document.getElementById("overlay").classList.add("open");
   document.getElementById("panel").classList.add("open");
-  document.body.style.overflow="hidden";
-  panelOpen=true;
+  document.body.style.overflow="hidden";panelOpen=true;
 }
 function closePanel(){document.getElementById("overlay").classList.remove("open");document.getElementById("panel").classList.remove("open");document.body.style.overflow="";panelOpen=false;}
 function showDraft(tab,btn){document.querySelectorAll(".dpane").forEach(p=>p.classList.remove("active"));document.getElementById("dp-"+tab).classList.add("active");document.querySelectorAll(".dtab").forEach(t=>t.classList.remove("active"));btn.classList.add("active");}
 function copyDraft(btn){navigator.clipboard.writeText(btn.previousElementSibling.value).then(()=>{btn.textContent="Copied!";setTimeout(()=>btn.textContent="Copy",1500);});}
-async function doAction(lid,action){
-  if(!currentUser){alert("Select your name from the dropdown first.");return;}
-  await fetch("/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,action})});
-  location.reload();
-}
-async function sendComment(lid){
-  if(!currentUser){alert("Select your name from the dropdown first.");return;}
-  const input=document.getElementById("ci-"+lid);
-  const body=input.value.trim();if(!body)return;
-  input.value="";
-  await fetch("/comment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,body})});
-  location.reload();
-}
+async function doAction(lid,action){if(!currentUser){alert("Select your name from the dropdown first.");return;}await fetch("/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,action})});location.reload();}
+async function sendComment(lid){if(!currentUser){alert("Select your name from the dropdown first.");return;}const input=document.getElementById("ci-"+lid);const body=input.value.trim();if(!body)return;input.value="";await fetch("/comment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,body})});location.reload();}
 
-// Keyboard nav
-let focusedIdx=-1;
-const visCards=()=>Array.from(document.querySelectorAll(".card")).filter(c=>c.style.display!=="none");
-document.addEventListener("keydown",e=>{
-  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")return;
-  const cards=visCards();
-  if(e.key==="ArrowDown"||e.key==="j"){e.preventDefault();focusedIdx=Math.min(focusedIdx+1,cards.length-1);cards.forEach((c,i)=>c.classList.toggle("focused",i===focusedIdx));cards[focusedIdx]?.scrollIntoView({behavior:"smooth",block:"nearest"});}
-  else if(e.key==="ArrowUp"||e.key==="k"){e.preventDefault();focusedIdx=Math.max(focusedIdx-1,0);cards.forEach((c,i)=>c.classList.toggle("focused",i===focusedIdx));cards[focusedIdx]?.scrollIntoView({behavior:"smooth",block:"nearest"});}
-  else if(e.key==="Enter"&&focusedIdx>=0&&!panelOpen){const id=cards[focusedIdx]?.dataset.id;if(id)openPanel(id);}
-  else if(e.key==="Escape")closePanel();
-  else if((e.key==="c"||e.key==="C")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doAction(id,"contacted");}
-  else if((e.key==="p"||e.key==="P")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doAction(id,"pass");}
-});
-
-// Filters
 let activeFilter="all",activeHood="all",maxPF=${maxPrice};
 function setFilter(f,btn){activeFilter=f;document.querySelectorAll(".fi").forEach(b=>b.classList.remove("active"));btn.classList.add("active");applyFilters();}
 function toggleHood(hood,btn){activeHood=hood;document.querySelectorAll(".hbtn").forEach(b=>b.classList.remove("active"));btn.classList.add("active");applyFilters();}
@@ -816,8 +802,7 @@ function applyFilters(){
     const s=card.dataset.status,n=card.dataset.isnew==="true";
     const p=parseInt(card.dataset.price)||0,l=card.dataset.loc||"";
     const ok=(activeFilter==="all"||(activeFilter==="new"&&n)||s===activeFilter)&&(activeHood==="all"||l.includes(activeHood))&&(p===0||p<=maxPF);
-    card.style.display=ok?"grid":"none";
-    if(ok)v++;
+    card.style.display=ok?"grid":"none";if(ok)v++;
   });
   document.getElementById("results-count").textContent=v+" listing"+(v!==1?"s":"");
 }
@@ -833,6 +818,18 @@ function sortCards(){
   });
   cards.forEach(c=>document.getElementById("cards-container").appendChild(c));
 }
+let focusedIdx=-1;
+const visCards=()=>Array.from(document.querySelectorAll(".card")).filter(c=>c.style.display!=="none");
+document.addEventListener("keydown",e=>{
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA")return;
+  const cards=visCards();
+  if(e.key==="ArrowDown"){e.preventDefault();focusedIdx=Math.min(focusedIdx+1,cards.length-1);cards.forEach((c,i)=>c.classList.toggle("focused",i===focusedIdx));cards[focusedIdx]?.scrollIntoView({behavior:"smooth",block:"nearest"});}
+  else if(e.key==="ArrowUp"){e.preventDefault();focusedIdx=Math.max(focusedIdx-1,0);cards.forEach((c,i)=>c.classList.toggle("focused",i===focusedIdx));cards[focusedIdx]?.scrollIntoView({behavior:"smooth",block:"nearest"});}
+  else if(e.key==="Enter"&&focusedIdx>=0&&!panelOpen){const id=cards[focusedIdx]?.dataset.id;if(id)openPanel(id);}
+  else if(e.key==="Escape")closePanel();
+  else if((e.key==="c"||e.key==="C")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doAction(id,"contacted");}
+  else if((e.key==="p"||e.key==="P")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doAction(id,"pass");}
+});
 </script>
 </body>
 </html>`);
