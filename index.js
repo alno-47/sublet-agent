@@ -1,4 +1,6 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const app = express();
 app.use(express.json());
 
@@ -8,10 +10,28 @@ const TWILIO_TOKEN = process.env.TWILIO_TOKEN;
 const TWILIO_FROM = process.env.TWILIO_FROM;
 const ALERT_PHONE = process.env.ALERT_PHONE;
 const PORT = process.env.PORT || 3000;
+const DATA_FILE = path.join("/tmp", "listings.json");
 
-let cachedListings = [];
-let lastFetch = null;
 let isFetching = false;
+
+function loadListings() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    }
+  } catch (e) {
+    console.error("Failed to load listings file:", e.message);
+  }
+  return [];
+}
+
+function saveListings(listings) {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(listings), "utf8");
+  } catch (e) {
+    console.error("Failed to save listings file:", e.message);
+  }
+}
 
 function passes(listing) {
   if ((listing.bedrooms || 0) < 2) return false;
@@ -48,8 +68,6 @@ async function fetchListings() {
     const idMatch = link.match(/(\d+)\.html/);
     const id = idMatch ? idMatch[1] : Math.random().toString(36).slice(2);
     const titleFromUrl = link.split("/").pop().replace(".html", "").replace(/-/g, " ");
-
-    // Try to extract price from surrounding HTML
     const linkIndex = html.indexOf(link);
     const surrounding = html.slice(Math.max(0, linkIndex - 200), linkIndex + 200);
     const priceMatch = surrounding.match(/\$[\d,]+/);
@@ -121,6 +139,7 @@ async function fetchAndProcess() {
     const eligible = items.filter(passes);
     console.log(`Found ${eligible.length} matching listings out of ${items.length}`);
 
+    const cachedListings = loadListings();
     const seen = new Set(cachedListings.map(l => l.id));
     const newListings = eligible.filter(l => !seen.has(l.id));
     console.log(`${newListings.length} are new`);
@@ -134,31 +153,32 @@ async function fetchAndProcess() {
     }
 
     if (newListings.length > 0) {
-      cachedListings = [...newListings, ...cachedListings].slice(0, 200);
+      const updated = [...newListings, ...cachedListings].slice(0, 200);
+      saveListings(updated);
       await sendSmsAlert(newListings.length);
     }
 
-    lastFetch = new Date().toISOString();
     return newListings.length;
   } finally {
     isFetching = false;
   }
 }
 
-// Routes
-app.get("/", (req, res) => res.json({ status: "ok", lastFetch, count: cachedListings.length, fetching: isFetching }));
+app.get("/", (req, res) => {
+  const listings = loadListings();
+  res.json({ status: "ok", count: listings.length, fetching: isFetching });
+});
 
 app.get("/listings", (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
-  res.json(cachedListings);
+  res.json(loadListings());
 });
 
-// Accept both GET and POST for /refresh so it works from browser too
 app.get("/refresh", async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
   try {
     const count = await fetchAndProcess();
-    res.json({ success: true, newListings: count, total: cachedListings.length });
+    res.json({ success: true, newListings: count, total: loadListings().length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -168,7 +188,7 @@ app.post("/refresh", async (req, res) => {
   res.header("Access-Control-Allow-Origin", "*");
   try {
     const count = await fetchAndProcess();
-    res.json({ success: true, newListings: count, total: cachedListings.length });
+    res.json({ success: true, newListings: count, total: loadListings().length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -183,8 +203,6 @@ app.options("*", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Sublet agent running on port ${PORT}`);
-  // Fetch on startup
   fetchAndProcess().catch(console.error);
-  // Then poll every 30 minutes
   setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
 });
