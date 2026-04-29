@@ -30,12 +30,13 @@ async function runApifyScrape() {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${APIFY_TOKEN}` },
       body: JSON.stringify({
-        startUrls: [{ url: "https://newyork.craigslist.org/search/sub" }],
+        urls: [{ url: "https://newyork.craigslist.org/search/sub" }],
         maxItems: 100,
       }),
     }
   );
   const runData = await runRes.json();
+  console.log("Apify run response:", JSON.stringify(runData?.data?.status));
   const datasetId = runData.data?.defaultDatasetId;
   if (!datasetId) throw new Error("No dataset ID returned from Apify");
 
