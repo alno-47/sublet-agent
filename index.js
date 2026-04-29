@@ -12,6 +12,7 @@ const SUMMARY_EMAIL = "anovikov@mba2027.hbs.edu";
 const DATABASE_URL = process.env.DATABASE_URL;
 const DRY_RUN = process.env.DRY_RUN !== "false";
 const PORT = process.env.PORT || 3000;
+const TARGET_PRICE = 6000;
 
 let isFetching = false;
 let db = null;
@@ -40,6 +41,18 @@ function timeAgo(date) {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function rejectReason(l) {
+  if ((l.bedrooms || 0) < 2) return "Less than 2 bedrooms";
+  const bad = ["Brooklyn", "Queens", "Bronx", "Jersey City", "Ridgewood", "Woodside", "Long Island City"];
+  const badMatch = bad.find(b => (l.location || "").includes(b) || (l.address?.city || "").includes(b));
+  if (badMatch) return `Outside Manhattan (${badMatch})`;
+  const av = (l.availableFrom || "").toLowerCase();
+  if (av.includes("jul")) return "Available July (too late)";
+  if (av.includes("aug")) return "Available August (too late)";
+  if (av.includes("sep")) return "Available September (too late)";
+  return null;
+}
 
 async function fetchListingDetail(url, idx) {
   try {
@@ -99,7 +112,7 @@ async function initDb() {
 
 async function loadListings() {
   if (!db) return [];
-  try { const r = await db.query("SELECT data FROM listings ORDER BY created_at DESC LIMIT 200"); return r.rows.map(r => r.data); }
+  try { const r = await db.query("SELECT data FROM listings ORDER BY created_at DESC LIMIT 500"); return r.rows.map(r => r.data); }
   catch (e) { return []; }
 }
 async function loadActions() {
@@ -137,15 +150,6 @@ async function saveComment(lid, un, body) {
   await db.query("INSERT INTO comments (listing_id, user_name, body) VALUES ($1, $2, $3)", [lid, un, body]);
 }
 
-function passes(l) {
-  if ((l.bedrooms || 0) < 2) return false;
-  const bad = ["Brooklyn", "Queens", "Bronx", "Jersey City", "Ridgewood", "Woodside", "Long Island City"];
-  if (bad.some(b => (l.location || "").includes(b) || (l.address?.city || "").includes(b))) return false;
-  const av = (l.availableFrom || "").toLowerCase();
-  if (av.includes("jul") || av.includes("aug") || av.includes("sep")) return false;
-  return true;
-}
-
 async function fetchListings() {
   console.log("Fetching listing index...");
   const res = await fetch("https://newyork.craigslist.org/search/mnh/sub?min_bedrooms=2&max_bedrooms=3", {
@@ -155,12 +159,12 @@ async function fetchListings() {
   const pat = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
   let m; const links = [];
   while ((m = pat.exec(html)) !== null) { if (!links.includes(m[1])) links.push(m[1]); }
-  console.log(`Found ${links.length} listing links, fetching details for up to 20...`);
+  console.log(`Found ${links.length} listing links, fetching details for up to 50...`);
   const items = [];
-  for (let i = 0; i < Math.min(links.length, 20); i++) {
+  for (let i = 0; i < Math.min(links.length, 50); i++) {
     const link = links[i];
     const id = (link.match(/(\d+)\.html/) || [])[1] || Math.random().toString(36).slice(2);
-    console.log(`Fetching listing ${i + 1}/20: ${id}`);
+    console.log(`Fetching listing ${i + 1}/50: ${id}`);
     const detail = await fetchListingDetail(link, i);
     if (detail && detail.title) {
       items.push({ id, title: detail.title, url: link, post: detail.post, price: detail.price, bedrooms: detail.bedrooms, location: detail.location || "Manhattan, NY", availableFrom: detail.availableFrom, datetime: new Date().toISOString(), phoneNumbers: detail.phoneNumbers || [], amenities: detail.amenities || [], platform: "Craigslist", address: { city: "New York" }, pics: detail.pics?.length ? detail.pics : [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]] });
@@ -205,7 +209,7 @@ async function sendSms(to, body) {
 
 async function sendAlertToMe(count) {
   if (!TWILIO_SID || !ALERT_PHONE || DRY_RUN) return;
-  await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") }, body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new NYC sublet${count > 1 ? "s" : ""} found. Review: https://sublet-agent-production.up.railway.app` }).toString() });
+  await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") }, body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new sublet${count > 1 ? "s" : ""} found. Review: https://sublet-agent-production.up.railway.app` }).toString() });
 }
 
 async function sendDailySummaryEmail() {
@@ -213,7 +217,8 @@ async function sendDailySummaryEmail() {
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const listings = await loadListings();
   const actions = await loadActions();
-  const todayListings = listings.filter(l => new Date(l.datetime) >= today);
+  const activeListings = listings.filter(l => !l.rejected);
+  const todayListings = activeListings.filter(l => new Date(l.datetime) >= today);
   const todayContacted = actions.filter(a => a.action === "contacted" && new Date(a.created_at) >= today);
   const todayReplies = actions.filter(a => a.action === "reply" && new Date(a.created_at) >= today);
   const todayViewings = actions.filter(a => a.action === "viewing" && new Date(a.created_at) >= today);
@@ -221,10 +226,10 @@ async function sendDailySummaryEmail() {
   const totalReplies = actions.filter(a => a.action === "reply");
   const prices = todayListings.map(l => { const m = (l.price || "").replace(/,/g, "").match(/\d+/); return m ? parseInt(m[0]) : 0; }).filter(p => p > 0);
   const avgPrice = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
-  const top3 = listings.filter(l => l.score && new Date(l.datetime) >= today).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3);
+  const top3 = activeListings.filter(l => l.score && new Date(l.datetime) >= today).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 3);
   const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const topListingsHtml = top3.length ? top3.map((l, i) => `<tr><td style="padding:10px;border-bottom:1px solid #f0f0f0"><strong style="color:#18181b">${i + 1}. ${(l.title || "Manhattan Sublet").slice(0, 50)}</strong><br><span style="color:#71717a;font-size:13px">${l.location || "Manhattan"} · ${l.price || "price TBD"} · Score: ${l.score}/10</span><br><span style="color:#a1a1aa;font-size:12px;font-style:italic">${l.scoreReason || ""}</span><br><a href="${l.url}" style="color:#0070f3;font-size:13px;text-decoration:none">View listing</a></td></tr>`).join("") : `<tr><td style="padding:10px;color:#71717a">No new scored listings today.</td></tr>`;
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;margin:0;padding:24px"><div style="max-width:560px;margin:0 auto"><div style="background:#0070f3;border-radius:12px 12px 0 0;padding:24px 28px;color:white"><div style="font-size:20px;font-weight:700;margin-bottom:4px">Summer Sublet Agent</div><div style="font-size:14px;opacity:0.85">Daily Summary - ${dateStr}</div></div><div style="background:white;padding:24px 28px;border-left:1px solid #e4e4e7;border-right:1px solid #e4e4e7"><table style="width:100%;border-collapse:collapse;margin-bottom:24px"><tr><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#0070f3">${todayListings.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">New today</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#00a651">${todayContacted.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Contacted</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#7c3aed">${todayReplies.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Replies</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#f59e0b">${todayViewings.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Viewings</div></td></tr></table>${avgPrice ? `<div style="background:#e8f2ff;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:14px;color:#0051a8">Average listing price today: <strong>$${avgPrice.toLocaleString()}/mo</strong></div>` : ""}<div style="margin-bottom:8px;font-size:11px;font-weight:700;color:#a1a1aa;text-transform:uppercase;letter-spacing:0.8px">Top listings today</div><table style="width:100%;border-collapse:collapse;margin-bottom:24px">${topListingsHtml}</table><div style="background:#f4f4f5;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#71717a"><strong style="color:#18181b">All time:</strong> ${listings.length} listings found - ${totalContacted.length} contacted - ${totalReplies.length} replies received</div><a href="https://sublet-agent-production.up.railway.app" style="display:block;background:#0070f3;color:white;text-align:center;padding:12px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">Open Summer Sublet Agent</a></div><div style="background:#f4f4f5;border-radius:0 0 12px 12px;padding:14px 28px;border:1px solid #e4e4e7;border-top:none;font-size:12px;color:#a1a1aa;text-align:center">Sent automatically every evening - Manhattan - June-August 2026</div></div></body></html>`;
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;margin:0;padding:24px"><div style="max-width:560px;margin:0 auto"><div style="background:#0070f3;border-radius:12px 12px 0 0;padding:24px 28px;color:white"><div style="font-size:20px;font-weight:700;margin-bottom:4px">Summer Sublet Agent</div><div style="font-size:14px;opacity:0.85">Daily Summary - ${dateStr}</div></div><div style="background:white;padding:24px 28px;border-left:1px solid #e4e4e7;border-right:1px solid #e4e4e7"><table style="width:100%;border-collapse:collapse;margin-bottom:24px"><tr><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#0070f3">${todayListings.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">New today</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#00a651">${todayContacted.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Contacted</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#7c3aed">${todayReplies.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Replies</div></td><td style="width:4%"></td><td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%"><div style="font-size:26px;font-weight:700;color:#f59e0b">${todayViewings.length}</div><div style="font-size:12px;color:#71717a;margin-top:2px">Viewings</div></td></tr></table>${avgPrice ? `<div style="background:#e8f2ff;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:14px;color:#0051a8">Average listing price today: <strong>$${avgPrice.toLocaleString()}/mo</strong></div>` : ""}<div style="margin-bottom:8px;font-size:11px;font-weight:700;color:#a1a1aa;text-transform:uppercase;letter-spacing:0.8px">Top listings today</div><table style="width:100%;border-collapse:collapse;margin-bottom:24px">${topListingsHtml}</table><div style="background:#f4f4f5;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#71717a"><strong style="color:#18181b">All time:</strong> ${activeListings.length} listings found - ${totalContacted.length} contacted - ${totalReplies.length} replies received</div><a href="https://sublet-agent-production.up.railway.app" style="display:block;background:#0070f3;color:white;text-align:center;padding:12px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">Open Summer Sublet Agent</a></div><div style="background:#f4f4f5;border-radius:0 0 12px 12px;padding:14px 28px;border:1px solid #e4e4e7;border-top:none;font-size:12px;color:#a1a1aa;text-align:center">Sent automatically every evening - Manhattan - June-August 2026</div></div></body></html>`;
   const res = await fetch("https://api.sendgrid.com/v3/mail/send", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${SENDGRID_API_KEY}` }, body: JSON.stringify({ personalizations: [{ to: [{ email: SUMMARY_EMAIL }] }], from: { email: "noreply@subletfinder.app", name: "Summer Sublet Agent" }, subject: `Sublet Daily Summary - ${todayListings.length} new listings - ${dateStr}`, content: [{ type: "text/html", value: html }] }) });
   if (res.ok) console.log("Daily summary email sent to", SUMMARY_EMAIL);
   else { const err = await res.text(); console.error("SendGrid error:", err); }
@@ -243,12 +248,20 @@ async function fetchAndProcess() {
   isFetching = true;
   try {
     const items = await fetchListings();
-    const eligible = items.filter(passes);
     const existing = await loadListings();
     const seen = new Set(existing.map(l => l.id));
-    const newListings = eligible.filter(l => !seen.has(l.id));
-    console.log(`${newListings.length} new listings after filtering`);
-    for (const l of newListings) {
+    const newItems = items.filter(l => !seen.has(l.id));
+    console.log(`${newItems.length} new listings before filtering`);
+    let newCount = 0;
+    for (const l of newItems) {
+      const reason = rejectReason(l);
+      if (reason) {
+        l.rejected = true;
+        l.rejectReason = reason;
+        await saveListing(l);
+        console.log(`Rejected: ${l.id} - ${reason}`);
+        continue;
+      }
       try {
         const r = await generateDraftAndScore(l);
         l.drafts = { inApp: r.inApp, email: r.email, sms: r.sms, whatsapp: r.whatsapp };
@@ -258,11 +271,12 @@ async function fetchAndProcess() {
       } catch (e) { console.error("Draft failed:", e.message); }
       if (l.phoneNumbers?.length > 0 && l.drafts) { const r = await sendSms(l.phoneNumbers[0], l.drafts.sms); l.smsSent = !r?.dryRun; l.smsDryRun = r?.dryRun || false; } else { l.needsManualSend = true; }
       await saveListing(l);
+      newCount++;
     }
-    if (newListings.length > 0) await sendAlertToMe(newListings.length);
+    if (newCount > 0) await sendAlertToMe(newCount);
     lastFetchTime = new Date().toISOString();
     if (db) await db.query("INSERT INTO meta (key, value) VALUES ('last_fetch', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [lastFetchTime]);
-    return newListings.length;
+    return newCount;
   } finally { isFetching = false; }
 }
 
@@ -290,14 +304,31 @@ app.get("/", async (req, res) => {
   const [listings, actions, comments, seenSet] = await Promise.all([loadListings(), loadActions(), loadComments(), loadSeen()]);
   const actionMap = {}; actions.forEach(a => { if (!actionMap[a.listing_id]) actionMap[a.listing_id] = []; actionMap[a.listing_id].push(a); });
   const commentMap = {}; comments.forEach(c => { if (!commentMap[c.listing_id]) commentMap[c.listing_id] = []; commentMap[c.listing_id].push(c); });
-  const newIds = listings.filter(l => !seenSet.has(l.id)).map(l => l.id);
-  const prices = listings.map(l => { const m = (l.price || "").replace(/,/g, "").match(/\d+/); return m ? parseInt(m[0]) : 0; }).filter(p => p > 0);
+  const activeListings = listings.filter(l => !l.rejected);
+  const rejectedListings = listings.filter(l => l.rejected);
+  const newIds = activeListings.filter(l => !seenSet.has(l.id)).map(l => l.id);
+  const prices = activeListings.map(l => { const m = (l.price || "").replace(/,/g, "").match(/\d+/); return m ? parseInt(m[0]) : 0; }).filter(p => p > 0);
   const avgPrice = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
   const maxPrice = Math.max(...prices, 10000);
   const lastUpdated = lastFetchTime ? timeAgo(lastFetchTime) : "never";
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const todayCount = listings.filter(l => new Date(l.datetime) >= today).length;
+  const todayCount = activeListings.filter(l => new Date(l.datetime) >= today).length;
+
+  // Compute status counts for sidebar badges
+  const statusCounts = { pending: 0, contacted: 0, reply: 0, viewing: 0, skipped: 0 };
+  activeListings.forEach(l => {
+    const la = actionMap[l.id] || [];
+    const ca = la.find(a => a.action === "contacted");
+    const ra = la.find(a => a.action === "reply");
+    const va = la.find(a => a.action === "viewing");
+    const pa = la.find(a => a.action === "pass" || a.action === "skipped");
+    const status = ra ? "reply" : va ? "viewing" : ca ? "contacted" : pa ? "skipped" : "pending";
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+  });
+
   const LOGO_SVG = `<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="36" height="36" rx="8" fill="#0070f3"/><path d="M18 8L30 18H27V28H9V18H6L18 8Z" fill="white"/><rect x="14" y="20" width="8" height="8" rx="1.5" fill="#0070f3"/></svg>`;
+
+  const allListings = [...activeListings, ...rejectedListings];
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -311,7 +342,7 @@ app.get("/", async (req, res) => {
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --blue:#0070f3;--blue-dark:#0051a8;--blue-light:#e8f2ff;
-  --green:#00a651;--green-bg:#e6f7ee;
+  --green:#00a651;--green-bg:#e6f7ee;--green-light:#d1fae5;
   --amber:#f59e0b;--amber-bg:#fffbeb;
   --red:#e53e3e;--red-bg:#fff5f5;
   --purple:#7c3aed;--purple-bg:#f5f3ff;
@@ -372,7 +403,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .fi{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:var(--r-sm);cursor:pointer;border:none;background:transparent;text-align:left;font-family:'Inter',sans-serif;font-size:13px;color:var(--gray-700);width:100%;transition:background 0.1s}
 .fi:hover{background:var(--gray-100)}
 .fi.active{background:var(--blue-light);color:var(--blue);font-weight:500}
-.fc{font-size:11px;background:var(--gray-200);color:var(--gray-500);padding:1px 7px;border-radius:20px;font-weight:500}
+.fc{font-size:11px;background:var(--gray-200);color:var(--gray-500);padding:1px 7px;border-radius:20px;font-weight:500;min-width:20px;text-align:center}
 .fi.active .fc{background:var(--blue);color:white}
 .hood-grid{display:flex;flex-wrap:wrap;gap:5px}
 .hbtn{font-size:12px;padding:4px 10px;border-radius:20px;border:1px solid var(--gray-200);background:var(--white);cursor:pointer;color:var(--gray-500);font-family:'Inter',sans-serif;transition:all 0.12s}
@@ -397,16 +428,17 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .skeleton-line{height:12px;background:linear-gradient(90deg,var(--gray-100) 25%,var(--gray-200) 50%,var(--gray-100) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:6px}
 .skeleton-line.wide{width:75%}.skeleton-line.medium{width:50%}.skeleton-line.short{width:35%}
 @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;margin-bottom:10px;cursor:pointer;transition:box-shadow 0.2s,border-color 0.2s;display:grid;grid-template-columns:200px 1fr;height:160px;border-left-width:4px}
+.card{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--r-lg);overflow:hidden;margin-bottom:10px;cursor:pointer;transition:box-shadow 0.2s,border-color 0.2s;display:grid;grid-template-columns:200px 1fr;height:175px;border-left-width:4px}
 .card:hover{box-shadow:var(--sh-lg);border-color:var(--gray-300)}
 .card.score-border-high{border-left-color:var(--green)}
 .card.score-border-mid{border-left-color:var(--amber)}
 .card.score-border-low{border-left-color:var(--red)}
 .card.score-border-none{border-left-color:var(--gray-200)}
 .card.is-new{box-shadow:0 0 0 2px rgba(0,112,243,0.15),var(--sh)}
-.card.status-skipped{opacity:0.4}
+.card.status-skipped{opacity:0.5}
+.card.status-rejected{opacity:0.45}
 .card.focused{box-shadow:0 0 0 3px rgba(0,112,243,0.3),var(--sh-lg)}
-.card-img-wrap{position:relative;overflow:hidden;height:160px}
+.card-img-wrap{position:relative;overflow:hidden;height:175px}
 .card-img{width:100%;height:100%;object-fit:cover;display:block;transition:transform 0.3s}
 .card:hover .card-img{transform:scale(1.04)}
 .card-img-ph{width:100%;height:100%;background:linear-gradient(135deg,var(--gray-100),var(--gray-200));display:flex;align-items:center;justify-content:center;color:var(--gray-400);font-size:12px}
@@ -416,21 +448,26 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .sf-mid{background:rgba(245,158,11,0.92);color:white}
 .sf-low{background:rgba(229,62,62,0.92);color:white}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.7}}
-.card-body{padding:14px 16px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
+.card-body{padding:12px 14px;display:flex;flex-direction:column;justify-content:space-between;overflow:hidden}
 .card-row1{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
 .card-title{font-size:13px;font-weight:600;color:var(--gray-900);line-height:1.3;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .card-price-wrap{text-align:right;flex-shrink:0}
 .card-price{font-size:15px;font-weight:700}
 .card-price-diff{font-size:11px;font-weight:500;margin-top:1px}
+.card-address{font-size:12px;color:var(--gray-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .price-below{color:var(--green)}.price-above{color:var(--red)}.price-avg{color:var(--gray-400)}
-.card-meta{font-size:12px;color:var(--gray-400);display:flex;gap:8px;flex-wrap:wrap}
-.card-score-reason{font-size:11px;color:var(--gray-400);font-style:italic;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-assessment{font-size:11px;color:var(--gray-700);line-height:1.4;background:var(--gray-50);border-left:2px solid var(--blue);padding:3px 7px;border-radius:0 4px 4px 0;margin:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card-assessment strong{color:var(--blue);font-weight:600}
+.reject-reason{font-size:11px;color:var(--red);background:var(--red-bg);padding:2px 7px;border-radius:4px;margin:2px 0;display:inline-block}
+.avail-legend{display:flex;gap:10px;margin-bottom:4px;flex-wrap:wrap}
+.avail-legend-item{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--gray-400)}
+.avail-legend-dot{width:10px;height:5px;border-radius:2px}
 .avail-bar{margin:2px 0}
 .avail-label{font-size:10px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;display:flex;justify-content:space-between}
-.avail-track{height:5px;background:var(--gray-100);border-radius:3px;position:relative;overflow:hidden}
-.avail-target{position:absolute;top:-1px;height:7px;border-radius:3px;background:rgba(0,112,243,0.18);border:1px solid var(--blue)}
+.avail-track{height:5px;background:var(--gray-200);border-radius:3px;position:relative;overflow:hidden}
+.avail-window{position:absolute;top:-1px;height:7px;border-radius:3px;background:rgba(0,112,243,0.12);border:1px solid rgba(0,112,243,0.3)}
 .avail-fill{position:absolute;top:0;height:100%;border-radius:3px}
-.af-green{background:var(--green)}.af-amber{background:var(--amber)}.af-gray{background:var(--gray-300)}
+.af-in{background:var(--green)}.af-out{background:#86efac}.af-gray{background:var(--gray-300)}
 .card-bottom{display:flex;align-items:center;justify-content:space-between;gap:6px}
 .card-tags{display:flex;gap:4px;flex-wrap:wrap}
 .tag{font-size:11px;font-weight:500;padding:2px 7px;border-radius:20px}
@@ -501,8 +538,8 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 @media(max-width:768px){
   .layout{grid-template-columns:1fr}
   .sidebar{display:none}
-  .card{grid-template-columns:120px 1fr;height:140px}
-  .card-img-wrap{height:140px}
+  .card{grid-template-columns:120px 1fr;height:155px}
+  .card-img-wrap{height:155px}
   .panel{width:100vw}
   nav{padding:0 16px}
   nav .nav-sub{display:none}
@@ -528,7 +565,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       <span class="chevron">▾</span>
     </button>
     <div class="user-menu" id="umenu">
-      <button class="uopt" onclick="setUser('Alex','A','')"><div class="uav">A</div><div><div>Alex</div><div class="uopt-sub">HBS · Germany</div></div></button>
+      <button class="uopt" onclick="setUser('Alex (Owner)','A','')"><div class="uav">A</div><div><div>Alex (Owner)</div><div class="uopt-sub">HBS · Germany</div></div></button>
       <button class="uopt" onclick="setUser('Julian','J','j')"><div class="uav j">J</div><div><div>Julian</div><div class="uopt-sub">HBS · Germany</div></div></button>
       <button class="uopt" onclick="setUser('Nora','N','n')"><div class="uav n">N</div><div><div>Nora</div><div class="uopt-sub">HBS · Austria</div></div></button>
       <div class="udiv"></div>
@@ -541,7 +578,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="hero-inner">
     <div class="hero-left">
       <h2>Manhattan Sublet Search · Summer 2026</h2>
-      <p>AI-powered apartment finder that automatically scans Craigslist, scores listings by fit, drafts and sends personalized outreach via SMS, and delivers a daily email summary.</p>
+      <p>Autonomous leasing agent that continuously monitors rental listings, applies AI-driven fit scoring, executes context-aware outreach across multiple channels and delivers daily performance summaries.</p>
       <div class="hero-pills">
         <span class="hero-pill">🤖 Auto-scraped every 30 min</span>
         <span class="hero-pill">✍️ AI-drafted messages</span>
@@ -553,7 +590,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="hero-right">
       <div class="hero-stats">
         <div class="hero-stat-block">
-          <div class="hero-stat">${listings.length}</div>
+          <div class="hero-stat">${activeListings.length}</div>
           <div class="hero-stat-lbl">total listings</div>
         </div>
         <div class="hero-stat-divider"></div>
@@ -571,20 +608,21 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <aside class="sidebar">
     <div class="stats-grid">
       <div class="scard hi"><div class="sval" id="s-new">${newIds.length}</div><div class="slbl">New</div></div>
-      <div class="scard"><div class="sval" id="s-total">${listings.length}</div><div class="slbl">Total</div></div>
+      <div class="scard"><div class="sval" id="s-total">${activeListings.length}</div><div class="slbl">Total</div></div>
       <div class="scard"><div class="sval" id="s-pending">–</div><div class="slbl">Needs Review</div></div>
       <div class="scard"><div class="sval" id="s-contacted">–</div><div class="slbl">Contacted</div></div>
     </div>
     <div class="sb-section">
       <div class="sb-label">Status</div>
       <div class="fi-group">
-        <button class="fi active" onclick="setFilter('all',this)">All listings <span class="fc">${listings.length}</span></button>
+        <button class="fi active" onclick="setFilter('all',this)">All listings <span class="fc">${activeListings.length}</span></button>
         <button class="fi" onclick="setFilter('new',this)">✨ New <span class="fc">${newIds.length}</span></button>
-        <button class="fi" onclick="setFilter('pending',this)">Needs Review</button>
-        <button class="fi" onclick="setFilter('contacted',this)">Contacted</button>
-        <button class="fi" onclick="setFilter('reply',this)">💬 Got reply</button>
-        <button class="fi" onclick="setFilter('viewing',this)">📅 Viewing</button>
-        <button class="fi" onclick="setFilter('skipped',this)">Passed</button>
+        <button class="fi" onclick="setFilter('pending',this)">Needs Review <span class="fc">${statusCounts.pending}</span></button>
+        <button class="fi" onclick="setFilter('contacted',this)">Contacted <span class="fc">${statusCounts.contacted}</span></button>
+        <button class="fi" onclick="setFilter('reply',this)">💬 Got reply <span class="fc">${statusCounts.reply}</span></button>
+        <button class="fi" onclick="setFilter('viewing',this)">📅 Viewing <span class="fc">${statusCounts.viewing}</span></button>
+        <button class="fi" onclick="setFilter('skipped',this)">Passed <span class="fc">${statusCounts.skipped}</span></button>
+        <button class="fi" onclick="setFilter('rejected',this)">🚫 Rejected <span class="fc">${rejectedListings.length}</span></button>
       </div>
     </div>
     <div class="sb-section">
@@ -629,64 +667,94 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 
   <main class="main-content">
     <div class="main-hdr">
-      <div class="results-lbl"><strong id="results-count">${listings.length} listings</strong>${avgPrice ? ` · avg $${avgPrice.toLocaleString()}/mo` : ""} · updated ${lastUpdated}</div>
+      <div class="results-lbl"><strong id="results-count">${activeListings.length} listings</strong>${avgPrice ? ` · avg $${avgPrice.toLocaleString()}/mo` : ""} · updated ${lastUpdated}</div>
       <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
     </div>
     <div id="cards-container">
-    ${listings.length === 0 ? `<div class="skeleton-list">${[1,2,3].map(()=>`<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-body"><div class="skeleton-line wide"></div><div class="skeleton-line medium"></div><div class="skeleton-line short"></div><div class="skeleton-line medium"></div></div></div>`).join("")}</div>` :
-    listings.map((l) => {
+    ${allListings.length === 0 ? `<div class="skeleton-list">${[1,2,3].map(()=>`<div class="skeleton-card"><div class="skeleton-img"></div><div class="skeleton-body"><div class="skeleton-line wide"></div><div class="skeleton-line medium"></div><div class="skeleton-line short"></div><div class="skeleton-line medium"></div></div></div>`).join("")}</div>` :
+    allListings.map((l) => {
       const la = actionMap[l.id] || [];
       const isNew = newIds.includes(l.id);
+      const isRejected = !!l.rejected;
       const ca = la.find(a => a.action === "contacted");
       const ra = la.find(a => a.action === "reply");
       const va = la.find(a => a.action === "viewing");
       const pa = la.find(a => a.action === "pass" || a.action === "skipped");
-      const status = ra ? "reply" : va ? "viewing" : ca ? "contacted" : pa ? "skipped" : "pending";
+      const status = isRejected ? "rejected" : ra ? "reply" : va ? "viewing" : ca ? "contacted" : pa ? "skipped" : "pending";
       const pm = (l.price || "").replace(/,/g, "").match(/\d+/);
       const price = pm ? parseInt(pm[0]) : 0;
       const loc = (l.location || "").toLowerCase();
       const score = l.score || 0;
       const sc = score >= 7 ? "high" : score >= 5 ? "mid" : score > 0 ? "low" : "none";
-      const statusTag = ra ? `<span class="tag tag-purple">💬 Reply</span>` : va ? `<span class="tag tag-blue">📅 Viewing</span>` : ca ? `<span class="tag tag-green">✓ Contacted</span>` : pa ? `<span class="tag tag-gray">Passed</span>` : "";
+      const statusTag = isRejected ? `<span class="tag tag-red">🚫 Rejected</span>` : ra ? `<span class="tag tag-purple">💬 Reply</span>` : va ? `<span class="tag tag-blue">📅 Viewing</span>` : ca ? `<span class="tag tag-green">✓ Contacted</span>` : pa ? `<span class="tag tag-gray">Passed</span>` : "";
+
+      // Price vs target and vs avg
       let priceDiff = "";
-      if (price > 0 && avgPrice > 0) {
-        const diff = Math.round((price - avgPrice) / avgPrice * 100);
-        if (diff < -5) priceDiff = `<div class="card-price-diff price-below">↓ ${Math.abs(diff)}% below avg</div>`;
-        else if (diff > 5) priceDiff = `<div class="card-price-diff price-above">↑ ${Math.abs(diff)}% above avg</div>`;
-        else priceDiff = `<div class="card-price-diff price-avg">≈ avg price</div>`;
+      if (price > 0) {
+        const targetDiff = Math.round((price - 6000) / 6000 * 100);
+        const targetLine = targetDiff < -5
+          ? `<div class="card-price-diff price-below">↓ ${Math.abs(targetDiff)}% below target</div>`
+          : targetDiff > 5
+          ? `<div class="card-price-diff price-above">↑ ${Math.abs(targetDiff)}% above target</div>`
+          : `<div class="card-price-diff price-avg">≈ on target</div>`;
+        let avgLine = "";
+        if (avgPrice > 0) {
+          const avgDiff = Math.round((price - avgPrice) / avgPrice * 100);
+          avgLine = avgDiff < -5
+            ? `<div class="card-price-diff price-below" style="font-size:10px">↓ ${Math.abs(avgDiff)}% below avg</div>`
+            : avgDiff > 5
+            ? `<div class="card-price-diff price-above" style="font-size:10px">↑ ${Math.abs(avgDiff)}% above avg</div>`
+            : `<div class="card-price-diff price-avg" style="font-size:10px">≈ avg price</div>`;
+        }
+        priceDiff = targetLine + avgLine;
       }
-      const monthMap = { may: 0, june: 25, july: 50, august: 75 };
+
+      // Availability bar
+      const monthPos = { may: 0, june: 25, july: 50, august: 75 };
       const avStr = (l.availableFrom || "").toLowerCase();
       let avPos = -1;
-      for (const [mon, pos] of Object.entries(monthMap)) { if (avStr.includes(mon)) { avPos = pos; break; } }
-      const avFillClass = avPos === 0 || avPos === 25 ? "af-green" : avPos === 50 ? "af-amber" : "af-gray";
-      const availBarHtml = `<div class="avail-bar"><div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div><div class="avail-track"><div class="avail-target" style="left:25%;width:50%"></div>${avPos >= 0 ? `<div class="avail-fill ${avFillClass}" style="left:${avPos}%;width:25%"></div>` : ""}</div></div>`;
+      for (const [mon, pos] of Object.entries(monthPos)) { if (avStr.includes(mon)) { avPos = pos; break; } }
+      // june and july are inside window (25-50%), may is outside but close, august outside
+      const isInWindow = avPos === 25 || avPos === 50;
+      const isOutWindow = avPos === 0;
+      const avFillClass = isInWindow ? "af-in" : isOutWindow ? "af-out" : avPos >= 0 ? "af-out" : "af-gray";
+      const availBarHtml = `
+        <div class="avail-legend">
+          <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--green)"></div>In window</div>
+          <div class="avail-legend-item"><div class="avail-legend-dot" style="background:#86efac"></div>Available, outside</div>
+          <div class="avail-legend-item"><div class="avail-legend-dot" style="background:var(--gray-300)"></div>Unknown</div>
+        </div>
+        <div class="avail-bar">
+          <div class="avail-label"><span>May</span><span>Jun</span><span>Jul</span><span>Aug</span></div>
+          <div class="avail-track">
+            <div class="avail-window" style="left:25%;width:50%"></div>
+            ${avPos >= 0 ? `<div class="avail-fill ${avFillClass}" style="left:${avPos}%;width:25%"></div>` : `<div class="avail-fill af-gray" style="left:0;width:100%"></div>`}
+          </div>
+        </div>`;
 
       return `
-<div class="card score-border-${sc} ${isNew ? "is-new" : ""} status-${status}"
+<div class="card score-border-${isRejected ? "none" : sc} ${isNew ? "is-new" : ""} status-${status}"
   data-id="${l.id}" data-status="${status}" data-isnew="${isNew}"
   data-price="${price}" data-score="${score}" data-loc="${loc}" data-datetime="${l.datetime || ""}"
   onclick="openPanel('${l.id}')">
   <div class="card-img-wrap">
     ${l.pics?.[0] ? `<img class="card-img" src="${l.pics[0]}" loading="lazy" alt="" onerror="this.parentNode.innerHTML='<div class=card-img-ph>No photo</div>'">` : `<div class="card-img-ph">No photo</div>`}
     ${isNew ? `<div class="new-badge">New</div>` : ""}
-    ${score ? `<div class="score-float sf-${sc}">${score}/10</div>` : ""}
+    ${score && !isRejected ? `<div class="score-float sf-${sc}">${score}/10</div>` : ""}
   </div>
   <div class="card-body">
     <div>
       <div class="card-row1">
-        <div class="card-title">${(l.title || "Manhattan Sublet").slice(0, 60)}</div>
+        <div style="flex:1;min-width:0">
+          <div class="card-title">${(l.title || "Manhattan Sublet").slice(0, 60)}</div>
+          <div class="card-address">📍 ${l.location || "Manhattan"}${l.bedrooms ? ` · 🛏 ${l.bedrooms}BR` : ""}${l.availableFrom ? ` · 📅 ${l.availableFrom}` : ""}</div>
+        </div>
         <div class="card-price-wrap">
           ${l.price ? `<div class="card-price">${l.price}</div>` : ""}
           ${priceDiff}
         </div>
       </div>
-      <div class="card-meta">
-        <span>📍 ${l.location || "Manhattan"}</span>
-        ${l.bedrooms ? `<span>🛏 ${l.bedrooms}BR</span>` : ""}
-        ${l.availableFrom ? `<span>📅 ${l.availableFrom}</span>` : ""}
-      </div>
-      ${l.scoreReason ? `<div class="card-score-reason">${l.scoreReason}</div>` : ""}
+      ${isRejected ? `<div class="reject-reason">🚫 ${l.rejectReason}</div>` : l.scoreReason ? `<div class="card-assessment"><strong>Agent assessment:</strong> ${l.scoreReason}</div>` : ""}
       ${availBarHtml}
     </div>
     <div class="card-bottom">
@@ -708,11 +776,12 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
   <div class="drawer-section">
     <div class="sb-label">Status</div>
     <div class="fi-group">
-      <button class="fi active" onclick="setFilter('all',this);closeDrawer()">All <span class="fc">${listings.length}</span></button>
-      <button class="fi" onclick="setFilter('new',this);closeDrawer()">✨ New</button>
-      <button class="fi" onclick="setFilter('pending',this);closeDrawer()">Needs Review</button>
-      <button class="fi" onclick="setFilter('contacted',this);closeDrawer()">Contacted</button>
-      <button class="fi" onclick="setFilter('skipped',this);closeDrawer()">Passed</button>
+      <button class="fi active" onclick="setFilter('all',this);closeDrawer()">All <span class="fc">${activeListings.length}</span></button>
+      <button class="fi" onclick="setFilter('new',this);closeDrawer()">✨ New <span class="fc">${newIds.length}</span></button>
+      <button class="fi" onclick="setFilter('pending',this);closeDrawer()">Needs Review <span class="fc">${statusCounts.pending}</span></button>
+      <button class="fi" onclick="setFilter('contacted',this);closeDrawer()">Contacted <span class="fc">${statusCounts.contacted}</span></button>
+      <button class="fi" onclick="setFilter('skipped',this);closeDrawer()">Passed <span class="fc">${statusCounts.skipped}</span></button>
+      <button class="fi" onclick="setFilter('rejected',this);closeDrawer()">🚫 Rejected <span class="fc">${rejectedListings.length}</span></button>
     </div>
   </div>
   <div class="drawer-section">
@@ -726,16 +795,17 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 <div class="panel" id="panel"><div id="panel-content"></div></div>
 
 <script>
-const listings = ${JSON.stringify(listings)};
+const listings = ${JSON.stringify(allListings)};
 const actionMap = ${JSON.stringify(actionMap)};
 const commentMap = ${JSON.stringify(commentMap)};
 const newIds = ${JSON.stringify(newIds)};
 const avgPrice = ${avgPrice};
+const TARGET_PRICE = ${TARGET_PRICE};
 
 let currentUser = localStorage.getItem("sublet_user");
 if (currentUser) restoreUser();
 function restoreUser() {
-  const cm={Alex:"",Julian:"j",Nora:"n",Marco:"m"};const cl=cm[currentUser]||"";
+  const cm={"Alex (Owner)":"","Julian":"j","Nora":"n","Marco":"m"};const cl=cm[currentUser]||"";
   document.getElementById("nav-lbl").textContent=currentUser;
   const av=document.getElementById("nav-av");
   av.textContent=currentUser[0];av.className="uav"+(cl?" "+cl:"");av.style.display="flex";
@@ -762,7 +832,7 @@ window.addEventListener("load",()=>{
   const cards=document.querySelectorAll(".card");let pending=0,contacted=0;
   cards.forEach(c=>{if(c.dataset.status==="pending")pending++;if(["contacted","reply","viewing"].includes(c.dataset.status))contacted++;});
   animCount(document.getElementById("s-new"),${newIds.length});
-  animCount(document.getElementById("s-total"),${listings.length});
+  animCount(document.getElementById("s-total"),${activeListings.length});
   animCount(document.getElementById("s-pending"),pending);
   animCount(document.getElementById("s-contacted"),contacted);
 });
@@ -781,35 +851,43 @@ function openPanel(id){
   const ta=t=>{const s=Math.floor((Date.now()-new Date(t))/1000);if(s<60)return"just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return Math.floor(s/86400)+"d ago";};
   const avCls=n=>n==="Julian"?"j":n==="Nora"?"n":n==="Marco"?"m":"";
   const pm=(l.price||"").replace(/,/g,"").match(/\\d+/);const price=pm?parseInt(pm[0]):0;
-  let pdiff="";if(price>0&&avgPrice>0){const d=Math.round((price-avgPrice)/avgPrice*100);if(d<-5)pdiff=\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(d)}% below avg</span>\`;else if(d>5)pdiff=\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(d)}% above avg</span>\`;}
+  let pdiff="";
+  if(price>0){
+    const td=Math.round((price-TARGET_PRICE)/TARGET_PRICE*100);
+    pdiff+=td<-5?\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(td)}% below target</span>\`:td>5?\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(td)}% above target</span>\`:\`<span style="color:var(--gray-400);font-size:12px">≈ on target</span>\`;
+    if(avgPrice>0){const ad=Math.round((price-avgPrice)/avgPrice*100);pdiff+=ad<-5?\` <span style="color:var(--green);font-size:11px">↓ \${Math.abs(ad)}% avg</span>\`:ad>5?\` <span style="color:var(--red);font-size:11px">↑ \${Math.abs(ad)}% avg</span>\`:"";}
+  }
 
   let actionBtns="";
-  if(!ca){
-    if(hasPhone&&l.drafts?.sms){actionBtns+=\`<button class="abtn btn-sms" id="sms-btn-\${l.id}" onclick="doSendSms('\${l.id}')">📱 Send SMS</button>\`;}
-    else{actionBtns+=\`<button class="abtn btn-sms" \${!hasPhone?"disabled":""} title="\${!hasPhone?"No phone number available":""}">✓ \${hasPhone?"Contacted":"No phone #"}</button>\`;}
+  if(!l.rejected){
+    if(!ca){
+      if(hasPhone&&l.drafts?.sms){actionBtns+=\`<button class="abtn btn-sms" id="sms-btn-\${l.id}" onclick="doSendSms('\${l.id}')">📱 Send SMS</button>\`;}
+      else{actionBtns+=\`<button class="abtn btn-sms" \${!hasPhone?"disabled":""} title="\${!hasPhone?"No phone number available":""}">✓ \${hasPhone?"Contacted":"No phone #"}</button>\`;}
+    }
+    if(ca&&!ra)actionBtns+=\`<button class="abtn btn-r" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`;
+    if(ra&&!va)actionBtns+=\`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`;
+    if(!pa)actionBtns+=\`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`;
   }
-  if(ca&&!ra)actionBtns+=\`<button class="abtn btn-r" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`;
-  if((ca||ra)&&!va)actionBtns+=\`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`;
-  if(!pa)actionBtns+=\`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`;
 
   document.getElementById("panel").dataset.listingId=id;
   document.getElementById("panel-content").innerHTML=\`
     <div class="ph"><div style="flex:1;min-width:0">
       <div class="ptitle">\${(l.title||"Manhattan Sublet").replace(/</g,"&lt;")}</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:2px">📍 \${l.location||"Manhattan"}\${l.bedrooms?" · 🛏 "+l.bedrooms+"BR":""}\${l.availableFrom?" · 📅 "+l.availableFrom:""}</div>
       \${l.price?\`<div class="pprice">\${l.price}<span style="font-size:12px;font-weight:400;color:var(--gray-400)">/mo</span> \${pdiff}</div>\`:""}
-      <div class="pmeta">📍 \${l.location||"Manhattan"}\${l.bedrooms?" · 🛏 "+l.bedrooms+"BR":""}\${l.availableFrom?" · 📅 "+l.availableFrom:""}</div>
     </div><button class="pclose" onclick="closePanel()">✕</button></div>
     \${l.pics?.[0]?\`<img class="pimg" src="\${l.pics[0]}" alt="">\`:""}
     <div class="pbody">
-      \${l.score?\`<div class="ps"><div class="ps-title">Match Score</div><div style="display:flex;align-items:center;gap:12px;padding:11px;background:var(--gray-50);border-radius:var(--r);border:1px solid var(--gray-200)"><span class="score-float sf-\${sc}" style="position:static;font-size:15px;padding:5px 13px">\${l.score}/10</span><span style="font-size:13px;color:var(--gray-500);font-style:italic">\${l.scoreReason||""}</span></div></div>\`:""}
+      \${l.rejected?\`<div style="background:var(--red-bg);border:1px solid #fca5a5;border-radius:var(--r);padding:10px 14px;margin-bottom:16px;font-size:13px;color:var(--red)"><strong>🚫 Rejected:</strong> \${l.rejectReason||"Did not pass filters"}</div>\`:""}
+      \${l.score?\`<div class="ps"><div class="ps-title">Match Score</div><div style="display:flex;align-items:center;gap:12px;padding:11px;background:var(--gray-50);border-radius:var(--r);border:1px solid var(--gray-200)"><span class="score-float sf-\${sc}" style="position:static;font-size:15px;padding:5px 13px">\${l.score}/10</span><div><div style="font-size:11px;font-weight:700;color:var(--blue);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px">Agent assessment</div><span style="font-size:13px;color:var(--gray-700)">\${l.scoreReason||""}</span></div></div></div>\`:""}
       \${l.post?\`<div class="ps"><div class="ps-title">Description</div><p style="font-size:13px;color:var(--gray-600);line-height:1.7">\${l.post.slice(0,600).replace(/</g,"&lt;")}</p></div>\`:""}
       \${l.amenities?.length?\`<div class="ps"><div class="ps-title">Amenities</div><div class="amen-list">\${l.amenities.map(a=>\`<span class="amen">\${a}</span>\`).join("")}</div></div>\`:""}
       <div class="ps"><a class="map-btn" href="https://maps.google.com?q=\${encodeURIComponent((l.location||"Manhattan")+" New York NY")}" target="_blank">🗺 View on Google Maps →</a></div>
-      \${l.drafts?\`<div class="ps"><div class="ps-title">Message Drafts</div><div class="dtabs"><button class="dtab active" onclick="showDraft('inApp',this)">In-app</button><button class="dtab" onclick="showDraft('email',this)">Email</button><button class="dtab" onclick="showDraft('sms',this)">SMS</button><button class="dtab" onclick="showDraft('whatsapp',this)">WhatsApp</button></div><div id="dp-inApp" class="dpane active"><div class="dbox"><textarea class="dta">\${(l.drafts.inApp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-email" class="dpane"><div class="dsubj"><strong>Subject:</strong> \${(l.drafts.email?.subject||"").replace(/</g,"&lt;")}</div><div class="dbox"><textarea class="dta">\${(l.drafts.email?.body||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-sms" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.sms||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-whatsapp" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.whatsapp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div></div>\`:""}
-      <div class="ps"><div class="ps-title">Outreach Status</div>
+      \${l.drafts&&!l.rejected?\`<div class="ps"><div class="ps-title">Message Drafts</div><div class="dtabs"><button class="dtab active" onclick="showDraft('inApp',this)">In-app</button><button class="dtab" onclick="showDraft('email',this)">Email</button><button class="dtab" onclick="showDraft('sms',this)">SMS</button><button class="dtab" onclick="showDraft('whatsapp',this)">WhatsApp</button></div><div id="dp-inApp" class="dpane active"><div class="dbox"><textarea class="dta">\${(l.drafts.inApp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-email" class="dpane"><div class="dsubj"><strong>Subject:</strong> \${(l.drafts.email?.subject||"").replace(/</g,"&lt;")}</div><div class="dbox"><textarea class="dta">\${(l.drafts.email?.body||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-sms" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.sms||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-whatsapp" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.whatsapp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div></div>\`:""}
+      \${!l.rejected?\`<div class="ps"><div class="ps-title">Outreach Status</div>
         <div class="abtns">\${actionBtns}</div>
         \${la.length?\`<div class="alog">\${la.map(a=>\`<div class="alog-i">\${a.action==="contacted"?"📱":a.action==="reply"?"💬":a.action==="viewing"?"📅":"✕"} <strong>\${a.user_name}</strong> \${a.action==="contacted"?"sent SMS":a.action==="reply"?"got a reply":a.action==="viewing"?"viewing scheduled":"passed"} · \${ta(a.created_at)}</div>\`).join("")}</div>\`:""}
-      </div>
+      </div>\`:""}
       <div class="ps"><div class="ps-title">Notes</div>
         <div class="clist">\${lc.map(c=>\`<div class="comment"><div class="cav \${avCls(c.user_name)}">\${c.user_name[0]}</div><div class="cbub"><div class="cmeta">\${c.user_name} · \${ta(c.created_at)}</div><div class="cbody">\${c.body.replace(/</g,"&lt;")}</div></div></div>\`).join("")}</div>
         <div class="cinput-wrap"><input class="cinput" id="ci-\${l.id}" placeholder="Add a note..." onkeydown="if(event.key==='Enter')sendComment('\${l.id}')"><button class="csend" onclick="sendComment('\${l.id}')">Send</button></div>
@@ -847,8 +925,12 @@ function applyFilters(){
   document.querySelectorAll(".card").forEach(card=>{
     const s=card.dataset.status,n=card.dataset.isnew==="true";
     const p=parseInt(card.dataset.price)||0,l=card.dataset.loc||"";
-    const ok=(activeFilter==="all"||(activeFilter==="new"&&n)||s===activeFilter)&&(activeHood==="all"||l.includes(activeHood))&&(p===0||p<=maxPF);
-    card.style.display=ok?"grid":"none";if(ok)v++;
+    const isRej=s==="rejected";
+    const ok=(activeFilter==="all"&&!isRej)||(activeFilter==="new"&&n&&!isRej)||(activeFilter==="rejected"&&isRej)||(activeFilter!=="all"&&activeFilter!=="new"&&activeFilter!=="rejected"&&s===activeFilter);
+    const hoodOk=activeHood==="all"||l.includes(activeHood);
+    const priceOk=p===0||p<=maxPF;
+    const show=ok&&hoodOk&&priceOk;
+    card.style.display=show?"grid":"none";if(show)v++;
   });
   document.getElementById("results-count").textContent=v+" listing"+(v!==1?"s":"");
 }
