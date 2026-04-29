@@ -23,7 +23,11 @@ function passes(listing) {
 }
 
 async function fetchRssListings() {
-  const res = await fetch("https://newyork.craigslist.org/search/sub?format=rss");
+  const res = await fetch("https://newyork.craigslist.org/search/sub?format=rss", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+  });
   const xml = await res.text();
   console.log("RSS fetch status:", res.status);
 
@@ -127,7 +131,6 @@ async function fetchAndProcess() {
   return newListings.length;
 }
 
-// Routes
 app.get("/", (req, res) => res.json({ status: "ok", lastFetch, count: cachedListings.length }));
 
 app.get("/listings", (req, res) => {
