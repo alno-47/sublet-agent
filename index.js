@@ -642,9 +642,9 @@ app.get("/", async (req, res) => {
   // A/B stats
   const abStats = { A: { sent: 0, replies: 0 }, B: { sent: 0, replies: 0 }, C: { sent: 0, replies: 0 } };
   smsMessages.filter(m => m.direction === "outbound" && m.ab_variant).forEach(m => { if (abStats[m.ab_variant]) abStats[m.ab_variant].sent++; });
-  activeListings.forEach(l => {
-    const la = actionMap[l.id] || [];
-    if (la.find(a => a.action === "reply") && l.abVariant && abStats[l.abVariant]) abStats[l.abVariant].replies++;
+  smsMessages.filter(m => m.direction === "inbound").forEach(m => {
+    const outbound = smsMessages.find(o => o.listing_id === m.listing_id && o.direction === "outbound" && o.ab_variant);
+    if (outbound && abStats[outbound.ab_variant]) abStats[outbound.ab_variant].replies++;
   });
 
   const platforms = ["All", ...new Set(activeListings.map(l => l.platform).filter(Boolean))];
@@ -1033,14 +1033,14 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
           const stat = abStats[v];
           const rate = stat.sent > 0 ? Math.round(stat.replies / stat.sent * 100) : 0;
           const maxSent = Math.max(...AB_VARIANTS.map(x => abStats[x].sent), 1);
-          const isWinner = stat.sent >= 5 && rate === Math.max(...AB_VARIANTS.map(x => abStats[x].sent > 0 ? Math.round(abStats[x].replies / abStats[x].sent * 100) : 0));
+          const isWinner = stat.sent >= 3 && rate === Math.max(...AB_VARIANTS.map(x => abStats[x].sent > 0 ? Math.round(abStats[x].replies / abStats[x].sent * 100) : 0));
           return `<div class="ab-row">
             <div class="ab-label">${v}</div>
             <div class="ab-bar-wrap"><div class="ab-bar" style="width:${Math.round(stat.sent / maxSent * 100)}%"></div></div>
-            <div class="ab-stat ${isWinner && stat.sent >= 5 ? "ab-winner" : ""}">${stat.replies}/${stat.sent}${stat.sent >= 5 ? ` (${rate}%)` : " –"}</div>
+            <div class="ab-stat ${isWinner && stat.sent >= 5 ? "ab-winner" : ""}">${stat.replies}/${stat.sent}${stat.sent >= 3 ? ` (${rate}%)` : " –"}</div>
           </div>`;
         }).join("")}
-        <div style="font-size:10px;color:var(--gray-400);margin-top:6px">Results shown after 5+ sends per variant</div>
+        <div style="font-size:10px;color:var(--gray-400);margin-top:6px">Results shown after 3+ sends per variant</div>
       </div>
     </div>
     <div class="sb-section">
