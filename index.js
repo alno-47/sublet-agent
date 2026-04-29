@@ -7,6 +7,8 @@ const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_TOKEN = process.env.TWILIO_TOKEN;
 const TWILIO_FROM = process.env.TWILIO_FROM;
 const ALERT_PHONE = process.env.ALERT_PHONE;
+const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
+const SUMMARY_EMAIL = "anovikov@mba2027.hbs.edu";
 const DATABASE_URL = process.env.DATABASE_URL;
 const DRY_RUN = process.env.DRY_RUN !== "false";
 const PORT = process.env.PORT || 3000;
@@ -46,7 +48,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function fetchListingDetail(url, idx) {
   try {
-    await sleep(300 + Math.random() * 400); // polite delay
+    await sleep(300 + Math.random() * 400);
     const res = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -58,49 +60,37 @@ async function fetchListingDetail(url, idx) {
     if (!res.ok) return null;
     const html = await res.text();
 
-    // Title
     const titleMatch = html.match(/<span\s+id="titletextonly"[^>]*>([\s\S]*?)<\/span>/i) ||
                        html.match(/<h1[^>]*class="[^"]*postingtitle[^"]*"[^>]*>([\s\S]*?)<\/h1>/i);
     const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, "").trim() : "";
 
-    // Price
     const priceMatch = html.match(/class="[^"]*price[^"]*"[^>]*>\s*(\$[\d,]+)/i) ||
                        html.match(/(\$[\d,]+)\s*(?:\/mo|per month)?/i);
     const price = priceMatch ? priceMatch[1] : "";
 
-    // Body text
     const bodyMatch = html.match(/<section\s+id="postingbody"[^>]*>([\s\S]*?)<\/section>/i);
     const post = bodyMatch ? bodyMatch[1].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 800) : "";
 
-    // Bedrooms
     const brMatch = (title + " " + post).match(/(\d)\s*b(?:r|ed(?:room)?s?)/i);
     const bedrooms = brMatch ? parseInt(brMatch[1]) : 2;
 
-    // Location/neighborhood
     const locMatch = html.match(/class="[^"]*mapaddress[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i) ||
                      html.match(/<small[^>]*>\(([^)]+)\)<\/small>/i);
     const location = locMatch ? locMatch[1].replace(/<[^>]+>/g, "").trim() : "Manhattan, NY";
 
-    // Available from
     const availMatch = post.match(/avail(?:able)?(?:\s+(?:starting|from|on|beginning))?\s+([a-z]+\s+\d+|\d+\/\d+)/i) ||
                        html.match(/available\s+([a-z]+ \d+)/i);
     const availableFrom = availMatch ? "available " + availMatch[1].toLowerCase() : "";
 
-    // Phone numbers
     const phoneMatches = html.match(/\+?1?\s*[-.]?\s*\(?\d{3}\)?\s*[-.]?\s*\d{3}\s*[-.]?\s*\d{4}/g) || [];
     const phoneNumbers = [...new Set(phoneMatches)].slice(0, 2);
 
-    // Amenities from attrs
     const amenities = [];
-    const attrMatches = html.matchAll(/class="[^"]*laundry_[^"]*"|class="[^"]*parking_[^"]*"|class="[^"]*cats_ok[^"]*"|class="[^"]*dogs_ok[^"]*"|class="[^"]*is_furnished[^"]*"|class="[^"]*air_conditioning[^"]*"|class="[^"]*no_smoking[^"]*"/gi);
     const amenityMap = { laundry: "laundry", parking: "parking", cats_ok: "cats OK", dogs_ok: "dogs OK", is_furnished: "furnished", air_conditioning: "A/C", no_smoking: "no smoking" };
-    for (const m of attrMatches) { for (const [k, v] of Object.entries(amenityMap)) { if (m[0].includes(k)) amenities.push(v); } }
+    for (const [k, v] of Object.entries(amenityMap)) {
+      if (html.includes(k)) amenities.push(v);
+    }
 
-    // Also scrape span.shared-line-bubble for amenities
-    const bubbles = html.matchAll(/<span\s+class="shared-line-bubble"[^>]*>([\s\S]*?)<\/span>/gi);
-    for (const b of bubbles) { const t = b[1].replace(/<[^>]+>/g, "").trim(); if (t && !amenities.includes(t)) amenities.push(t); }
-
-    // Images
     const imgMatches = html.matchAll(/https:\/\/images\.craigslist\.org\/[^"'\s]+_600x450\.jpg/g);
     const pics = [...new Set([...imgMatches].map(m => m[0]))].slice(0, 3);
 
@@ -195,23 +185,14 @@ async function fetchListings() {
     const detail = await fetchListingDetail(link, i);
     if (detail && detail.title) {
       items.push({
-        id,
-        title: detail.title,
-        url: link,
-        post: detail.post,
-        price: detail.price,
-        bedrooms: detail.bedrooms,
-        location: detail.location || "Manhattan, NY",
-        availableFrom: detail.availableFrom,
-        datetime: new Date().toISOString(),
-        phoneNumbers: detail.phoneNumbers || [],
-        amenities: detail.amenities || [],
-        platform: "Craigslist",
-        address: { city: "New York" },
+        id, title: detail.title, url: link, post: detail.post, price: detail.price,
+        bedrooms: detail.bedrooms, location: detail.location || "Manhattan, NY",
+        availableFrom: detail.availableFrom, datetime: new Date().toISOString(),
+        phoneNumbers: detail.phoneNumbers || [], amenities: detail.amenities || [],
+        platform: "Craigslist", address: { city: "New York" },
         pics: detail.pics?.length ? detail.pics : [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]],
       });
     } else {
-      // fallback with placeholder title
       items.push({
         id, title: "Manhattan Sublet", url: link, post: "", price: "", bedrooms: 2,
         location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(),
@@ -245,6 +226,129 @@ async function sendAlertToMe(count) {
   await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_SID}/Messages.json`, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + Buffer.from(`${TWILIO_SID}:${TWILIO_TOKEN}`).toString("base64") }, body: new URLSearchParams({ To: ALERT_PHONE, From: TWILIO_FROM, Body: `${count} new NYC sublet${count > 1 ? "s" : ""} found. Review: https://sublet-agent-production.up.railway.app` }).toString() });
 }
 
+async function sendDailySummaryEmail() {
+  if (!SENDGRID_API_KEY) { console.log("No SendGrid key, skipping daily summary"); return; }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const listings = await loadListings();
+  const actions = await loadActions();
+
+  const todayListings = listings.filter(l => new Date(l.datetime) >= today);
+  const todayContacted = actions.filter(a => a.action === "contacted" && new Date(a.created_at) >= today);
+  const todayReplies = actions.filter(a => a.action === "reply" && new Date(a.created_at) >= today);
+  const todayViewings = actions.filter(a => a.action === "viewing" && new Date(a.created_at) >= today);
+  const totalContacted = actions.filter(a => a.action === "contacted");
+  const totalReplies = actions.filter(a => a.action === "reply");
+
+  const prices = todayListings.map(l => { const m = (l.price || "").replace(/,/g, "").match(/\d+/); return m ? parseInt(m[0]) : 0; }).filter(p => p > 0);
+  const avgPrice = prices.length ? Math.round(prices.reduce((a, b) => a + b, 0) / prices.length) : 0;
+
+  const top3 = listings
+    .filter(l => l.score && new Date(l.datetime) >= today)
+    .sort((a, b) => (b.score || 0) - (a.score || 0))
+    .slice(0, 3);
+
+  const dateStr = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+  const topListingsHtml = top3.length ? top3.map((l, i) => `
+    <tr>
+      <td style="padding:10px;border-bottom:1px solid #f0f0f0">
+        <strong style="color:#18181b">${i + 1}. ${(l.title || "Manhattan Sublet").slice(0, 50)}</strong><br>
+        <span style="color:#71717a;font-size:13px">${l.location || "Manhattan"} · ${l.price || "price TBD"} · Score: ${l.score}/10</span><br>
+        <span style="color:#a1a1aa;font-size:12px;font-style:italic">${l.scoreReason || ""}</span><br>
+        <a href="${l.url}" style="color:#0070f3;font-size:13px;text-decoration:none">View listing →</a>
+      </td>
+    </tr>`).join("") : `<tr><td style="padding:10px;color:#71717a">No new scored listings today.</td></tr>`;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f7f7f5;margin:0;padding:24px">
+  <div style="max-width:560px;margin:0 auto">
+    <div style="background:#0070f3;border-radius:12px 12px 0 0;padding:24px 28px;color:white">
+      <div style="font-size:24px;margin-bottom:4px">🤝 NYC Sublet Finder</div>
+      <div style="font-size:14px;opacity:0.85">Daily Summary · ${dateStr}</div>
+    </div>
+    <div style="background:white;padding:24px 28px;border-left:1px solid #e4e4e7;border-right:1px solid #e4e4e7">
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+        <tr>
+          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
+            <div style="font-size:26px;font-weight:700;color:#0070f3">${todayListings.length}</div>
+            <div style="font-size:12px;color:#71717a;margin-top:2px">New today</div>
+          </td>
+          <td style="width:4%"></td>
+          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
+            <div style="font-size:26px;font-weight:700;color:#00a651">${todayContacted.length}</div>
+            <div style="font-size:12px;color:#71717a;margin-top:2px">Contacted</div>
+          </td>
+          <td style="width:4%"></td>
+          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
+            <div style="font-size:26px;font-weight:700;color:#7c3aed">${todayReplies.length}</div>
+            <div style="font-size:12px;color:#71717a;margin-top:2px">Replies</div>
+          </td>
+          <td style="width:4%"></td>
+          <td style="padding:12px;background:#f4f4f5;border-radius:8px;text-align:center;width:25%">
+            <div style="font-size:26px;font-weight:700;color:#f59e0b">${todayViewings.length}</div>
+            <div style="font-size:12px;color:#71717a;margin-top:2px">Viewings</div>
+          </td>
+        </tr>
+      </table>
+
+      ${avgPrice ? `<div style="background:#e8f2ff;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:14px;color:#0051a8">
+        Average listing price today: <strong>$${avgPrice.toLocaleString()}/mo</strong>
+      </div>` : ""}
+
+      <div style="margin-bottom:8px;font-size:11px;font-weight:700;color:#a1a1aa;text-transform:uppercase;letter-spacing:0.8px">Top listings today</div>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
+        ${topListingsHtml}
+      </table>
+
+      <div style="background:#f4f4f5;border-radius:8px;padding:12px 16px;margin-bottom:24px;font-size:13px;color:#71717a">
+        <strong style="color:#18181b">All time:</strong> ${listings.length} listings found · ${totalContacted.length} contacted · ${totalReplies.length} replies received
+      </div>
+
+      <a href="https://sublet-agent-production.up.railway.app" style="display:block;background:#0070f3;color:white;text-align:center;padding:12px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">
+        Open NYC Sublet Finder →
+      </a>
+    </div>
+    <div style="background:#f4f4f5;border-radius:0 0 12px 12px;padding:14px 28px;border:1px solid #e4e4e7;border-top:none;font-size:12px;color:#a1a1aa;text-align:center">
+      Sent automatically every evening · Manhattan · June–August 2026
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${SENDGRID_API_KEY}` },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: SUMMARY_EMAIL }] }],
+      from: { email: "noreply@subletfinder.app", name: "NYC Sublet Finder" },
+      subject: `Sublet Daily Summary · ${todayListings.length} new listings · ${dateStr}`,
+      content: [{ type: "text/html", value: html }]
+    })
+  });
+
+  if (res.ok) console.log("Daily summary email sent to", SUMMARY_EMAIL);
+  else { const err = await res.text(); console.error("SendGrid error:", err); }
+}
+
+function scheduleDailySummary() {
+  const now = new Date();
+  const next7pm = new Date();
+  next7pm.setHours(19, 0, 0, 0);
+  if (now >= next7pm) next7pm.setDate(next7pm.getDate() + 1);
+  const msUntil = next7pm - now;
+  console.log(`Daily summary scheduled in ${Math.round(msUntil / 60000)} minutes`);
+  setTimeout(() => {
+    sendDailySummaryEmail().catch(console.error);
+    setInterval(() => sendDailySummaryEmail().catch(console.error), 24 * 60 * 60 * 1000);
+  }, msUntil);
+}
+
 async function fetchAndProcess() {
   if (isFetching) return 0;
   isFetching = true;
@@ -271,6 +375,7 @@ app.post("/action", async (req, res) => { const { listingId, userName, action } 
 app.post("/comment", async (req, res) => { const { listingId, userName, body } = req.body; if (!listingId || !userName || !body) return res.status(400).json({ error: "Missing" }); await saveComment(listingId, userName, body); res.json({ success: true }); });
 app.post("/seen", async (req, res) => { const { listingIds, userName } = req.body; if (!listingIds || !userName) return res.status(400).json({ error: "Missing" }); await markAllSeen(listingIds, userName); res.json({ success: true }); });
 app.get("/refresh", async (req, res) => { try { const count = await fetchAndProcess(); res.json({ success: true, newListings: count, dryRun: DRY_RUN }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get("/test-email", async (req, res) => { try { await sendDailySummaryEmail(); res.json({ success: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 app.get("/", async (req, res) => {
   const [listings, actions, comments, seenSet] = await Promise.all([loadListings(), loadActions(), loadComments(), loadSeen()]);
@@ -526,6 +631,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
         <span class="hero-pill">✍️ AI-drafted messages</span>
         <span class="hero-pill">📊 Match scoring</span>
         <span class="hero-pill">👥 Shared team workspace</span>
+        <span class="hero-pill">📧 Daily email summary</span>
       </div>
     </div>
     <div class="hero-right">
@@ -840,4 +946,5 @@ app.listen(PORT, async () => {
   await initDb();
   fetchAndProcess().catch(console.error);
   setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
+  scheduleDailySummary();
 });
