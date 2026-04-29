@@ -2,7 +2,6 @@ const express = require("express");
 const app = express();
 app.use(express.json());
 
-const APIFY_TOKEN = process.env.APIFY_TOKEN;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const TWILIO_SID = process.env.TWILIO_SID;
 const TWILIO_TOKEN = process.env.TWILIO_TOKEN;
@@ -23,28 +22,45 @@ function passes(listing) {
   return true;
 }
 
-async function runApifyScrape() {
-  const runRes = await fetch(
-    "https://api.apify.com/v2/acts/ivanvs~craigslist-scraper/runs?waitForFinish=180",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${APIFY_TOKEN}` },
-      body: JSON.stringify({
-        urls: [{ url: "https://newyork.craigslist.org/search/sub" }],
-        maxItems: 100,
-      }),
-    }
-  );
-  const runData = await runRes.json();
-  console.log("Full Apify response:", JSON.stringify(runData));
-  const datasetId = runData.data?.defaultDatasetId;
-  if (!datasetId) throw new Error("No dataset ID returned from Apify");
+async function fetchRssListings() {
+  const res = await fetch("https://newyork.craigslist.org/search/sub?format=rss");
+  const xml = await res.text();
+  console.log("RSS fetch status:", res.status);
 
-  const itemsRes = await fetch(
-    `https://api.apify.com/v2/datasets/${datasetId}/items?clean=true`,
-    { headers: { Authorization: `Bearer ${APIFY_TOKEN}` } }
-  );
-  return await itemsRes.json();
+  const items = [];
+  const entries = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+  for (const entry of entries) {
+    const get = (tag) => {
+      const m = entry.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>|<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
+      return m ? (m[1] || m[2] || "").trim() : "";
+    };
+    const title = get("title");
+    const url = (entry.match(/<link>(.*?)<\/link>/) || [])[1] || "";
+    const description = get("description");
+    const pubDate = get("pubDate");
+
+    const brMatch = title.match(/(\d)\s*b(r|ed)/i);
+    const bedrooms = brMatch ? parseInt(brMatch[1]) : 0;
+    const priceMatch = description.match(/\$[\d,]+/);
+    const price = priceMatch ? priceMatch[0] : "";
+
+    items.push({
+      id: url.match(/(\d+)\.html/)?.[1] || Math.random().toString(36).slice(2),
+      title,
+      url,
+      post: description.replace(/<[^>]+>/g, "").trim(),
+      price,
+      bedrooms,
+      location: "Manhattan, NY",
+      availableFrom: "",
+      datetime: pubDate,
+      phoneNumbers: [],
+      platform: "Craigslist",
+      address: { city: "New York" },
+    });
+  }
+  console.log(`RSS returned ${items.length} items`);
+  return items;
 }
 
 async function generateDraft(listing) {
@@ -85,9 +101,8 @@ async function sendSmsAlert(count) {
 }
 
 async function fetchAndProcess() {
-  console.log("APIFY_TOKEN set:", !!APIFY_TOKEN, "length:", APIFY_TOKEN?.length);
-  console.log("Fetching listings from Apify...");
-  const items = await runApifyScrape();
+  console.log("Fetching listings from Craigslist RSS...");
+  const items = await fetchRssListings();
   const eligible = items.filter(passes);
   console.log(`Found ${eligible.length} matching listings out of ${items.length}`);
 
