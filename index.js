@@ -206,7 +206,18 @@ async function fetchListings() {
 }
 
 async function generateDraftAndScore(l) {
-  const system = `You help three HBS students (Alex, Julian, Nora from Germany/Austria) find a 2-3BR Manhattan sublet for June–August 2026. Return ONLY valid JSON: {"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence"}. Score 1-10 strictly on price ($4-8k/mo), location, June availability, furnished status.`;
+  const system = `You help three HBS students (Alex, Julian, Nora from Germany/Austria) find a 2-3BR Manhattan sublet for June–August 2026. Return ONLY valid JSON: {"inApp":"...","email":{"subject":"...","body":"..."},"sms":"...","whatsapp":"...","score":7,"scoreReason":"one sentence"}.
+
+inApp: Short casual Craigslist internal message, 3-4 sentences. Say they're 3 HBS students looking for a summer sublet June–August 2026, ask if still available and about the price. Sign off "— Alex, Julian & Nora". No "Dear/Hi", just get to the point.
+
+email: Professional but warm. Subject line should mention dates and bedroom count. Body introduces all three as HBS MBA students, mentions they are responsible international students, confirms exact dates (June 1 – Aug 31), asks about availability, price, and viewing. Sign off "Alex, Julian & Nora".
+
+sms: Max 2 sentences. Just: who they are, what they want, the dates. No sign-off needed.
+
+whatsapp: Casual and friendly, 3-5 sentences. Similar to inApp but slightly warmer, can use an emoji or two. Sign off "Alex, Julian & Nora 🙂".
+
+Score 1-10 strictly on price ($4-8k/mo), location, June availability, furnished status.`;
+
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST", headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, system, messages: [{ role: "user", content: `Title: ${l.title}\nPrice: ${l.price}\nLocation: ${l.location}\nBedrooms: ${l.bedrooms}\nAvailable: ${l.availableFrom}\nDescription: ${(l.post || "").slice(0, 400)}\nAmenities: ${(l.amenities || []).join(", ")}` }] })
@@ -370,6 +381,27 @@ async function fetchAndProcess() {
     return newListings.length;
   } finally { isFetching = false; }
 }
+
+// New endpoint: send SMS on demand from the UI
+app.post("/send-sms", async (req, res) => {
+  const { listingId, userName } = req.body;
+  if (!listingId || !userName) return res.status(400).json({ error: "Missing listingId or userName" });
+  const listings = await loadListings();
+  const l = listings.find(x => x.id === listingId);
+  if (!l) return res.status(404).json({ error: "Listing not found" });
+  if (!l.phoneNumbers?.length) return res.status(400).json({ error: "No phone number available for this listing" });
+  if (!l.drafts?.sms) return res.status(400).json({ error: "No SMS draft available" });
+  const result = await sendSms(l.phoneNumbers[0], l.drafts.sms);
+  if (result.dryRun) {
+    await saveAction(listingId, userName, "contacted");
+    return res.json({ success: true, dryRun: true });
+  }
+  if (result.sid) {
+    await saveAction(listingId, userName, "contacted");
+    return res.json({ success: true, sid: result.sid });
+  }
+  return res.status(500).json({ error: result.message || "SMS failed" });
+});
 
 app.post("/action", async (req, res) => { const { listingId, userName, action } = req.body; if (!listingId || !userName || !action) return res.status(400).json({ error: "Missing" }); await saveAction(listingId, userName, action); res.json({ success: true }); });
 app.post("/comment", async (req, res) => { const { listingId, userName, body } = req.body; if (!listingId || !userName || !body) return res.status(400).json({ error: "Missing" }); await saveComment(listingId, userName, body); res.json({ success: true }); });
@@ -552,7 +584,9 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .abtns{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}
 .abtn{height:33px;padding:0 13px;border-radius:var(--r-sm);border:1.5px solid var(--gray-200);cursor:pointer;font-size:12px;font-weight:500;font-family:'Inter',sans-serif;transition:all 0.15s;display:flex;align-items:center;gap:4px}
 .abtn:hover{filter:brightness(0.95);transform:translateY(-1px)}
-.btn-c{background:var(--green-bg);color:var(--green);border-color:#86efac}
+.abtn:disabled{opacity:0.5;cursor:not-allowed;transform:none}
+.btn-sms{background:#e8f2ff;color:var(--blue);border-color:#93c5fd}
+.btn-sms-sent{background:var(--green-bg);color:var(--green);border-color:#86efac}
 .btn-r{background:var(--purple-bg);color:var(--purple);border-color:#c4b5fd}
 .btn-v{background:var(--blue-light);color:var(--blue);border-color:#93c5fd}
 .btn-p{background:var(--red-bg);color:var(--red);border-color:#fca5a5}
@@ -647,7 +681,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="stats-grid">
       <div class="scard hi"><div class="sval" id="s-new">${newIds.length}</div><div class="slbl">New</div></div>
       <div class="scard"><div class="sval" id="s-total">${listings.length}</div><div class="slbl">Total</div></div>
-      <div class="scard"><div class="sval" id="s-pending">–</div><div class="slbl">Pending</div></div>
+      <div class="scard"><div class="sval" id="s-pending">–</div><div class="slbl">Needs Review</div></div>
       <div class="scard"><div class="sval" id="s-contacted">–</div><div class="slbl">Contacted</div></div>
     </div>
     <div class="sb-section">
@@ -655,7 +689,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
       <div class="fi-group">
         <button class="fi active" onclick="setFilter('all',this)">All listings <span class="fc">${listings.length}</span></button>
         <button class="fi" onclick="setFilter('new',this)">✨ New <span class="fc">${newIds.length}</span></button>
-        <button class="fi" onclick="setFilter('pending',this)">Pending</button>
+        <button class="fi" onclick="setFilter('pending',this)">Needs Review</button>
         <button class="fi" onclick="setFilter('contacted',this)">Contacted</button>
         <button class="fi" onclick="setFilter('reply',this)">💬 Got reply</button>
         <button class="fi" onclick="setFilter('viewing',this)">📅 Viewing</button>
@@ -787,7 +821,7 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
     <div class="fi-group">
       <button class="fi active" onclick="setFilter('all',this);closeDrawer()">All <span class="fc">${listings.length}</span></button>
       <button class="fi" onclick="setFilter('new',this);closeDrawer()">✨ New</button>
-      <button class="fi" onclick="setFilter('pending',this);closeDrawer()">Pending</button>
+      <button class="fi" onclick="setFilter('pending',this);closeDrawer()">Needs Review</button>
       <button class="fi" onclick="setFilter('contacted',this);closeDrawer()">Contacted</button>
       <button class="fi" onclick="setFilter('skipped',this);closeDrawer()">Passed</button>
     </div>
@@ -853,12 +887,27 @@ function openPanel(id){
   const la=actionMap[id]||[],lc=commentMap[id]||[];
   const ca=la.find(a=>a.action==="contacted"),ra=la.find(a=>a.action==="reply");
   const va=la.find(a=>a.action==="viewing"),pa=la.find(a=>a.action==="pass"||a.action==="skipped");
+  const hasPhone=l.phoneNumbers&&l.phoneNumbers.length>0;
   const sc=(l.score||0)>=7?"high":(l.score||0)>=5?"mid":"low";
   const ta=t=>{const s=Math.floor((Date.now()-new Date(t))/1000);if(s<60)return"just now";if(s<3600)return Math.floor(s/60)+"m ago";if(s<86400)return Math.floor(s/3600)+"h ago";return Math.floor(s/86400)+"d ago";};
   const avCls=n=>n==="Julian"?"j":n==="Nora"?"n":n==="Marco"?"m":"";
   const pm=(l.price||"").replace(/,/g,"").match(/\\d+/);const price=pm?parseInt(pm[0]):0;
   let pdiff="";if(price>0&&avgPrice>0){const d=Math.round((price-avgPrice)/avgPrice*100);if(d<-5)pdiff=\`<span style="color:var(--green);font-size:12px;font-weight:500">↓ \${Math.abs(d)}% below avg</span>\`;else if(d>5)pdiff=\`<span style="color:var(--red);font-size:12px;font-weight:500">↑ \${Math.abs(d)}% above avg</span>\`;}
   document.getElementById("panel").dataset.listingId=id;
+
+  // Build outreach action buttons
+  let actionBtns = "";
+  if (!ca) {
+    if (hasPhone && l.drafts?.sms) {
+      actionBtns += \`<button class="abtn btn-sms" id="sms-btn-\${l.id}" onclick="doSendSms('\${l.id}')">📱 Send SMS</button>\`;
+    } else {
+      actionBtns += \`<button class="abtn btn-sms" onclick="doAction('\${l.id}','contacted')" title="\${!hasPhone?'No phone number available':''}"\${!hasPhone?' disabled':''}>✓ \${hasPhone?'Contacted':'No phone #'}</button>\`;
+    }
+  }
+  if (ca && !ra) actionBtns += \`<button class="abtn btn-r" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`;
+  if ((ca||ra) && !va) actionBtns += \`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`;
+  if (!pa) actionBtns += \`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`;
+
   document.getElementById("panel-content").innerHTML=\`
     <div class="ph"><div style="flex:1;min-width:0">
       <div class="ptitle">\${(l.title||"Manhattan Sublet").replace(/</g,"&lt;")}</div>
@@ -873,13 +922,8 @@ function openPanel(id){
       <div class="ps"><a class="map-btn" href="https://maps.google.com?q=\${encodeURIComponent((l.location||"Manhattan")+" New York NY")}" target="_blank">🗺 View on Google Maps →</a></div>
       \${l.drafts?\`<div class="ps"><div class="ps-title">Message Drafts</div><div class="dtabs"><button class="dtab active" onclick="showDraft('inApp',this)">In-app</button><button class="dtab" onclick="showDraft('email',this)">Email</button><button class="dtab" onclick="showDraft('sms',this)">SMS</button><button class="dtab" onclick="showDraft('whatsapp',this)">WhatsApp</button></div><div id="dp-inApp" class="dpane active"><div class="dbox"><textarea class="dta">\${(l.drafts.inApp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-email" class="dpane"><div class="dsubj"><strong>Subject:</strong> \${(l.drafts.email?.subject||"").replace(/</g,"&lt;")}</div><div class="dbox"><textarea class="dta">\${(l.drafts.email?.body||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-sms" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.sms||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div><div id="dp-whatsapp" class="dpane"><div class="dbox"><textarea class="dta">\${(l.drafts.whatsapp||"").replace(/</g,"&lt;")}</textarea><button class="cbtn" onclick="copyDraft(this)">Copy</button></div></div></div>\`:""}
       <div class="ps"><div class="ps-title">Outreach Status</div>
-        <div class="abtns">
-          \${!ca?\`<button class="abtn btn-c" onclick="doAction('\${l.id}','contacted')">✓ Contacted</button>\`:""}
-          \${ca&&!ra?\`<button class="abtn btn-r" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`:""}
-          \${(ca||ra)&&!va?\`<button class="abtn btn-v" onclick="doAction('\${l.id}','viewing')">📅 Viewing</button>\`:""}
-          \${!pa?\`<button class="abtn btn-p" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`:""}
-        </div>
-        \${la.length?\`<div class="alog">\${la.map(a=>\`<div class="alog-i">\${a.action==="contacted"?"✓":a.action==="reply"?"💬":a.action==="viewing"?"📅":"✕"} <strong>\${a.user_name}</strong> \${a.action==="contacted"?"contacted":a.action==="reply"?"got a reply":a.action==="viewing"?"viewing scheduled":"passed"} · \${ta(a.created_at)}</div>\`).join("")}</div>\`:""}
+        <div class="abtns">\${actionBtns}</div>
+        \${la.length?\`<div class="alog">\${la.map(a=>\`<div class="alog-i">\${a.action==="contacted"?"📱":a.action==="reply"?"💬":a.action==="viewing"?"📅":"✕"} <strong>\${a.user_name}</strong> \${a.action==="contacted"?"sent SMS":a.action==="reply"?"got a reply":a.action==="viewing"?"viewing scheduled":"passed"} · \${ta(a.created_at)}</div>\`).join("")}</div>\`:""}
       </div>
       <div class="ps"><div class="ps-title">Notes</div>
         <div class="clist">\${lc.map(c=>\`<div class="comment"><div class="cav \${avCls(c.user_name)}">\${c.user_name[0]}</div><div class="cbub"><div class="cmeta">\${c.user_name} · \${ta(c.created_at)}</div><div class="cbody">\${c.body.replace(/</g,"&lt;")}</div></div></div>\`).join("")}</div>
@@ -895,6 +939,27 @@ function openPanel(id){
 function closePanel(){document.getElementById("overlay").classList.remove("open");document.getElementById("panel").classList.remove("open");document.body.style.overflow="";panelOpen=false;}
 function showDraft(tab,btn){document.querySelectorAll(".dpane").forEach(p=>p.classList.remove("active"));document.getElementById("dp-"+tab).classList.add("active");document.querySelectorAll(".dtab").forEach(t=>t.classList.remove("active"));btn.classList.add("active");}
 function copyDraft(btn){navigator.clipboard.writeText(btn.previousElementSibling.value).then(()=>{btn.textContent="Copied!";setTimeout(()=>btn.textContent="Copy",1500);});}
+
+async function doSendSms(lid) {
+  if (!currentUser) { alert("Select your name from the dropdown first."); return; }
+  const btn = document.getElementById("sms-btn-" + lid);
+  if (btn) { btn.disabled = true; btn.textContent = "Sending..."; }
+  try {
+    const res = await fetch("/send-sms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ listingId: lid, userName: currentUser }) });
+    const data = await res.json();
+    if (data.success) {
+      if (btn) { btn.textContent = "✓ SMS Sent!"; btn.className = "abtn btn-sms-sent"; }
+      setTimeout(() => location.reload(), 1200);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = "📱 Send SMS"; }
+      alert("SMS failed: " + (data.error || "Unknown error"));
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = "📱 Send SMS"; }
+    alert("SMS failed: " + e.message);
+  }
+}
+
 async function doAction(lid,action){if(!currentUser){alert("Select your name from the dropdown first.");return;}await fetch("/action",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,action})});location.reload();}
 async function sendComment(lid){if(!currentUser){alert("Select your name from the dropdown first.");return;}const input=document.getElementById("ci-"+lid);const body=input.value.trim();if(!body)return;input.value="";await fetch("/comment",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({listingId:lid,userName:currentUser,body})});location.reload();}
 
@@ -933,7 +998,7 @@ document.addEventListener("keydown",e=>{
   else if(e.key==="ArrowUp"){e.preventDefault();focusedIdx=Math.max(focusedIdx-1,0);cards.forEach((c,i)=>c.classList.toggle("focused",i===focusedIdx));cards[focusedIdx]?.scrollIntoView({behavior:"smooth",block:"nearest"});}
   else if(e.key==="Enter"&&focusedIdx>=0&&!panelOpen){const id=cards[focusedIdx]?.dataset.id;if(id)openPanel(id);}
   else if(e.key==="Escape")closePanel();
-  else if((e.key==="c"||e.key==="C")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doAction(id,"contacted");}
+  else if((e.key==="c"||e.key==="C")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doSendSms(id);}
   else if((e.key==="p"||e.key==="P")&&focusedIdx>=0){const id=cards[focusedIdx]?.dataset.id;if(id)doAction(id,"pass");}
 });
 </script>
@@ -942,7 +1007,7 @@ document.addEventListener("keydown",e=>{
 });
 
 app.listen(PORT, async () => {
-  console.log(`Sublet agent running on port ${PORT} [DRY_RUN=${DRY_RUN}]`);
+  console.log(\`Sublet agent running on port \${PORT} [DRY_RUN=\${DRY_RUN}]\`);
   await initDb();
   fetchAndProcess().catch(console.error);
   setInterval(() => fetchAndProcess().catch(console.error), 30 * 60 * 1000);
