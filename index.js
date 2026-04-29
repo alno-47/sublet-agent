@@ -14,6 +14,19 @@ const PORT = process.env.PORT || 3000;
 let isFetching = false;
 let db = null;
 
+const APARTMENT_PHOTOS = [
+  "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=600&q=80",
+  "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=600&q=80",
+  "https://images.unsplash.com/photo-1484154218962-a197022b5858?w=600&q=80",
+  "https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=600&q=80",
+  "https://images.unsplash.com/photo-1493809842364-78817add7ffb?w=600&q=80",
+  "https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=600&q=80",
+  "https://images.unsplash.com/photo-1574362848149-11496d93a7c7?w=600&q=80",
+  "https://images.unsplash.com/photo-1556912173-3bb406ef7e77?w=600&q=80",
+  "https://images.unsplash.com/photo-1565183928294-7063f23ce0f8?w=600&q=80",
+  "https://images.unsplash.com/photo-1554995207-c18c203602cb?w=600&q=80",
+];
+
 async function initDb() {
   const { default: pg } = await import("pg");
   const { Pool } = pg;
@@ -85,14 +98,21 @@ async function fetchListings() {
   const linkPattern = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
   let m; const links = [];
   while ((m = linkPattern.exec(html)) !== null) { if (!links.includes(m[1])) links.push(m[1]); }
-  for (const link of links.slice(0, 50)) {
+  for (let i = 0; i < links.slice(0, 50).length; i++) {
+    const link = links[i];
     const idMatch = link.match(/(\d+)\.html/);
     const id = idMatch ? idMatch[1] : Math.random().toString(36).slice(2);
     const title = link.split("/").pop().replace(".html", "").replace(/-/g, " ");
     const li = html.indexOf(link);
     const sur = html.slice(Math.max(0, li - 200), li + 200);
     const pm = sur.match(/\$[\d,]+/);
-    items.push({ id, title, url: link, post: "", price: pm ? pm[0] : "", bedrooms: 2, location: "Manhattan, NY", availableFrom: "", datetime: new Date().toISOString(), phoneNumbers: [], platform: "Craigslist", address: { city: "New York" } });
+    items.push({
+      id, title, url: link, post: "", price: pm ? pm[0] : "",
+      bedrooms: 2, location: "Manhattan, NY", availableFrom: "",
+      datetime: new Date().toISOString(), phoneNumbers: [],
+      platform: "Craigslist", address: { city: "New York" },
+      pics: [APARTMENT_PHOTOS[i % APARTMENT_PHOTOS.length]],
+    });
   }
   return items;
 }
@@ -180,16 +200,29 @@ body{font-family:'Inter',sans-serif;background:var(--gray-50);color:var(--gray-9
 /* NAV */
 nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32px;height:60px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:200;box-shadow:var(--shadow-sm)}
 .nav-brand{display:flex;align-items:center;gap:10px}
-.nav-logo{width:32px;height:32px;background:var(--blue);border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-size:16px}
+.nav-logo{width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-size:22px}
 .nav-title{font-size:15px;font-weight:700;letter-spacing:-0.3px;color:var(--gray-900)}
 .nav-subtitle{font-size:12px;color:var(--gray-400);margin-top:1px}
-.nav-users{display:flex;align-items:center;gap:6px}
-.user-btn{height:34px;padding:0 14px;border-radius:20px;border:1.5px solid var(--gray-200);background:var(--white);cursor:pointer;color:var(--gray-500);font-size:13px;font-weight:500;font-family:'Inter',sans-serif;transition:all 0.15s;display:flex;align-items:center;gap:6px}
-.user-btn:hover{border-color:var(--blue);color:var(--blue)}
-.user-btn.active{border-color:var(--blue);color:var(--blue);background:var(--blue-light)}
-.user-avatar{width:20px;height:20px;border-radius:50%;background:var(--blue);color:white;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center}
-.user-avatar.j{background:var(--purple)}
-.user-avatar.n{background:#db2777}
+
+/* USER DROPDOWN */
+.user-dropdown-wrap{position:relative}
+.user-dropdown-btn{height:36px;padding:0 14px;border-radius:20px;border:1.5px solid var(--gray-200);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;font-family:'Inter',sans-serif;color:var(--gray-700);display:flex;align-items:center;gap:8px;transition:all 0.15s}
+.user-dropdown-btn:hover{border-color:var(--blue);color:var(--blue)}
+.user-dropdown-btn.has-user{border-color:var(--blue);color:var(--blue);background:var(--blue-light)}
+.user-avatar-sm{width:22px;height:22px;border-radius:50%;background:var(--blue);color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.user-avatar-sm.j{background:var(--purple)}
+.user-avatar-sm.n{background:#db2777}
+.user-avatar-sm.m{background:#059669}
+.chevron{font-size:10px;color:var(--gray-400);transition:transform 0.15s}
+.user-dropdown-btn.open .chevron{transform:rotate(180deg)}
+.user-dropdown-menu{position:absolute;top:calc(100% + 8px);right:0;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius);box-shadow:var(--shadow-lg);min-width:200px;overflow:hidden;display:none;z-index:300}
+.user-dropdown-menu.open{display:block}
+.user-dropdown-divider{height:1px;background:var(--gray-200);margin:4px 0}
+.user-option{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;font-size:13px;font-weight:500;color:var(--gray-700);transition:background 0.1s;border:none;background:transparent;width:100%;text-align:left;font-family:'Inter',sans-serif}
+.user-option:hover{background:var(--gray-50)}
+.user-option.active{background:var(--blue-light);color:var(--blue)}
+.user-option-sub{font-size:11px;color:var(--gray-400);font-weight:400;margin-top:1px}
+.user-option-info{display:flex;flex-direction:column;align-items:flex-start}
 
 /* LAYOUT */
 .layout{display:grid;grid-template-columns:280px 1fr;min-height:calc(100vh - 60px)}
@@ -198,32 +231,26 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .sidebar{background:var(--white);border-right:1px solid var(--gray-200);padding:24px 20px;position:sticky;top:60px;height:calc(100vh - 60px);overflow-y:auto}
 .sidebar-section{margin-bottom:28px}
 .sidebar-label{font-size:11px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px}
-
-/* Stats in sidebar */
 .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:28px}
 .stat-card{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:12px;text-align:center}
 .stat-card.highlight{background:var(--blue-light);border-color:var(--blue)}
 .stat-val{font-size:22px;font-weight:700;line-height:1}
 .stat-card.highlight .stat-val{color:var(--blue)}
 .stat-lbl{font-size:11px;color:var(--gray-400);margin-top:3px}
-
 .filter-group{display:flex;flex-direction:column;gap:4px}
 .filter-item{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:var(--radius-sm);cursor:pointer;transition:all 0.12s;border:none;background:transparent;text-align:left;font-family:'Inter',sans-serif;font-size:13px;color:var(--gray-700);width:100%}
 .filter-item:hover{background:var(--gray-100)}
 .filter-item.active{background:var(--blue-light);color:var(--blue);font-weight:500}
 .filter-count{font-size:11px;background:var(--gray-200);color:var(--gray-500);padding:1px 7px;border-radius:20px;font-weight:500}
 .filter-item.active .filter-count{background:var(--blue);color:white}
-
 .hood-grid{display:flex;flex-wrap:wrap;gap:5px}
 .hood-btn{font-size:12px;padding:4px 10px;border-radius:20px;border:1px solid var(--gray-200);background:var(--white);cursor:pointer;color:var(--gray-500);font-family:'Inter',sans-serif;transition:all 0.12s}
 .hood-btn:hover{border-color:var(--blue);color:var(--blue)}
 .hood-btn.active{background:var(--blue);color:white;border-color:var(--blue)}
-
 .price-slider-wrap{padding:4px 0}
 .price-slider-wrap input[type=range]{width:100%;accent-color:var(--blue);margin-bottom:6px}
 .price-slider-labels{display:flex;justify-content:space-between;font-size:12px;color:var(--gray-400)}
 .price-val{font-size:14px;font-weight:600;color:var(--gray-900);margin-bottom:6px}
-
 .sort-select{width:100%;padding:8px 10px;border:1px solid var(--gray-200);border-radius:var(--radius-sm);background:var(--white);font-family:'Inter',sans-serif;font-size:13px;color:var(--gray-700);cursor:pointer}
 
 /* MAIN */
@@ -249,17 +276,13 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .score-mid{background:rgba(245,158,11,0.9);color:white}
 .score-low{background:rgba(229,62,62,0.9);color:white}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.75}}
-
 .card-body{padding:16px 18px;display:flex;flex-direction:column;justify-content:space-between}
-.card-top{}
 .card-row1{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px}
 .card-title{font-size:14px;font-weight:600;color:var(--gray-900);line-height:1.3;flex:1;margin-right:12px;text-transform:capitalize}
 .card-price{font-size:16px;font-weight:700;white-space:nowrap;color:var(--gray-900)}
 .card-price small{font-size:11px;font-weight:400;color:var(--gray-400)}
 .card-meta{font-size:12px;color:var(--gray-400);margin-bottom:8px;display:flex;gap:10px;flex-wrap:wrap}
-.card-desc{font-size:12px;color:var(--gray-500);line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:10px}
 .card-score-reason{font-size:11px;color:var(--gray-400);font-style:italic;margin-bottom:8px}
-
 .card-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .card-tags{display:flex;gap:5px;flex-wrap:wrap}
 .tag{font-size:11px;font-weight:500;padding:2px 8px;border-radius:20px}
@@ -269,7 +292,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .tag-amber{background:var(--amber-bg);color:var(--amber)}
 .tag-purple{background:var(--purple-bg);color:var(--purple)}
 .tag-red{background:var(--red-bg);color:var(--red)}
-.card-action-tags{display:flex;gap:4px}
 
 /* PANEL */
 .panel-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:300;opacity:0;pointer-events:none;transition:opacity 0.25s;backdrop-filter:blur(2px)}
@@ -286,7 +308,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .panel-body{padding:20px 24px}
 .panel-section{margin-bottom:24px}
 .panel-section-title{font-size:11px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:0.8px;margin-bottom:12px}
-
 .draft-tabs{display:flex;gap:4px;margin-bottom:12px;border-bottom:1px solid var(--gray-200);padding-bottom:0}
 .draft-tab{font-size:13px;padding:8px 14px;border:none;background:transparent;cursor:pointer;color:var(--gray-400);font-family:'Inter',sans-serif;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.12s}
 .draft-tab.active{color:var(--blue);border-bottom-color:var(--blue)}
@@ -298,7 +319,6 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .draft-ta:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,112,243,0.1)}
 .copy-btn{position:absolute;top:10px;right:10px;font-size:11px;padding:4px 10px;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius-sm);cursor:pointer;color:var(--gray-400);font-family:'Inter',sans-serif;transition:all 0.12s}
 .copy-btn:hover{border-color:var(--blue);color:var(--blue)}
-
 .action-btns-panel{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .action-btn{height:34px;padding:0 14px;border-radius:var(--radius-sm);border:1.5px solid var(--gray-200);cursor:pointer;font-size:13px;font-weight:500;font-family:'Inter',sans-serif;transition:all 0.15s;display:flex;align-items:center;gap:5px}
 .btn-contacted{background:var(--green-bg);color:var(--green);border-color:#86efac}
@@ -306,15 +326,14 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .btn-viewing{background:var(--blue-light);color:var(--blue);border-color:#93c5fd}
 .btn-pass{background:var(--red-bg);color:var(--red);border-color:#fca5a5}
 .action-btn:hover{filter:brightness(0.95);transform:translateY(-1px)}
-
 .action-log{display:flex;flex-direction:column;gap:6px}
 .action-log-item{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--gray-500);padding:6px 10px;background:var(--gray-50);border-radius:var(--radius-sm)}
-
 .comment-list{display:flex;flex-direction:column;gap:10px;margin-bottom:12px}
 .comment{display:flex;gap:10px}
 .c-avatar{width:30px;height:30px;border-radius:50%;background:var(--blue);color:white;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .c-avatar.j{background:var(--purple)}
 .c-avatar.n{background:#db2777}
+.c-avatar.m{background:#059669}
 .c-bubble{flex:1;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:4px 12px 12px 12px;padding:8px 12px}
 .c-meta{font-size:11px;color:var(--gray-400);margin-bottom:3px;font-weight:500}
 .c-body{font-size:13px;color:var(--gray-800);line-height:1.5}
@@ -323,18 +342,13 @@ nav{background:var(--white);border-bottom:1px solid var(--gray-200);padding:0 32
 .comment-input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(0,112,243,0.1)}
 .comment-send{height:38px;padding:0 16px;border-radius:var(--radius);border:none;background:var(--blue);color:white;font-size:13px;font-weight:600;font-family:'Inter',sans-serif;cursor:pointer;transition:background 0.15s}
 .comment-send:hover{background:var(--blue-dark)}
-
 .map-btn{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--blue);text-decoration:none;font-weight:500;padding:6px 0}
 .map-btn:hover{text-decoration:underline}
-
 .amenity-list{display:flex;flex-wrap:wrap;gap:5px}
 .amenity{font-size:11px;padding:3px 9px;border-radius:var(--radius-sm);background:var(--gray-100);color:var(--gray-600);border:1px solid var(--gray-200)}
-
 .dry-run-bar{background:var(--amber-bg);border-bottom:1px solid #fde68a;padding:8px 32px;font-size:12px;color:var(--amber);font-weight:500;text-align:center}
-
 .empty-state{text-align:center;padding:80px 20px;color:var(--gray-400)}
 .empty-state h3{font-size:18px;color:var(--gray-700);margin-bottom:8px}
-
 @media(max-width:768px){
   .layout{grid-template-columns:1fr}
   .sidebar{display:none}
@@ -351,16 +365,37 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
 
 <nav>
   <div class="nav-brand">
-    <div class="nav-logo">🏙</div>
+    <div class="nav-logo">🤝</div>
     <div>
       <div class="nav-title">NYC Sublet Finder</div>
       <div class="nav-subtitle">Alex · Julian · Nora · Manhattan · June–Aug 2026</div>
     </div>
   </div>
-  <div class="nav-users">
-    <button class="user-btn" onclick="setUser('Alex',this)"><div class="user-avatar">A</div>Alex</button>
-    <button class="user-btn" onclick="setUser('Julian',this)"><div class="user-avatar j">J</div>Julian</button>
-    <button class="user-btn" onclick="setUser('Nora',this)"><div class="user-avatar n">N</div>Nora</button>
+  <div class="user-dropdown-wrap" id="user-dropdown-wrap">
+    <button class="user-dropdown-btn" id="user-dropdown-btn" onclick="toggleDropdown()">
+      <div class="user-avatar-sm" id="nav-avatar" style="display:none"></div>
+      <span id="nav-user-label">Select user</span>
+      <span class="chevron">▾</span>
+    </button>
+    <div class="user-dropdown-menu" id="user-dropdown-menu">
+      <button class="user-option" onclick="setUser('Alex', 'A', '')">
+        <div class="user-avatar-sm">A</div>
+        <div class="user-option-info"><span>Alex</span><span class="user-option-sub">HBS · Germany</span></div>
+      </button>
+      <button class="user-option" onclick="setUser('Julian', 'J', 'j')">
+        <div class="user-avatar-sm j">J</div>
+        <div class="user-option-info"><span>Julian</span><span class="user-option-sub">HBS · Austria</span></div>
+      </button>
+      <button class="user-option" onclick="setUser('Nora', 'N', 'n')">
+        <div class="user-avatar-sm n">N</div>
+        <div class="user-option-info"><span>Nora</span><span class="user-option-sub">HBS · Germany</span></div>
+      </button>
+      <div class="user-dropdown-divider"></div>
+      <button class="user-option" onclick="setUser('Marco', 'M', 'm')">
+        <div class="user-avatar-sm m">M</div>
+        <div class="user-option-info"><span>Marco</span><span class="user-option-sub">For review only</span></div>
+      </button>
+    </div>
   </div>
 </nav>
 
@@ -372,7 +407,6 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
       <div class="stat-card"><div class="stat-val" id="s-pending">–</div><div class="stat-lbl">Pending</div></div>
       <div class="stat-card"><div class="stat-val" id="s-contacted">–</div><div class="stat-lbl">Contacted</div></div>
     </div>
-
     <div class="sidebar-section">
       <div class="sidebar-label">Status</div>
       <div class="filter-group">
@@ -385,7 +419,6 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
         <button class="filter-item" onclick="setFilter('skipped',this)">Passed</button>
       </div>
     </div>
-
     <div class="sidebar-section">
       <div class="sidebar-label">Neighborhood</div>
       <div class="hood-grid">
@@ -400,7 +433,6 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
         <button class="hood-btn" data-hood="harlem" onclick="toggleHood('harlem',this)">Harlem</button>
       </div>
     </div>
-
     <div class="sidebar-section">
       <div class="sidebar-label">Max price</div>
       <div class="price-slider-wrap">
@@ -409,7 +441,6 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
         <div class="price-slider-labels"><span>$1k</span><span>$${Math.round(maxPrice/1000)}k</span></div>
       </div>
     </div>
-
     <div class="sidebar-section">
       <div class="sidebar-label">Sort by</div>
       <select class="sort-select" id="sort-select" onchange="sortCards()">
@@ -426,7 +457,6 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
       <div class="results-label"><strong id="results-count">${listings.length} listings</strong> in Manhattan</div>
       <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
     </div>
-
     <div id="cards-container">
     ${listings.length === 0 ? `<div class="empty-state"><h3>No listings yet</h3><p>The agent checks every 30 minutes.</p></div>` :
     listings.map(l => {
@@ -442,7 +472,6 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
       const loc = (l.location || "").toLowerCase();
       const sc = (l.score || 0) >= 7 ? "score-high" : (l.score || 0) >= 5 ? "score-mid" : "score-low";
       const statusTag = ra ? `<span class="tag tag-purple">💬 Reply</span>` : va ? `<span class="tag tag-blue">📅 Viewing</span>` : ca ? `<span class="tag tag-green">✓ Contacted</span>` : pa ? `<span class="tag tag-gray">Passed</span>` : "";
-
       return `
 <div class="card ${isNew ? "is-new" : ""} status-${status}"
   data-id="${l.id}" data-status="${status}" data-isnew="${isNew}"
@@ -454,7 +483,7 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
     ${l.score ? `<div class="score-badge ${sc}">${l.score}/10</div>` : ""}
   </div>
   <div class="card-body">
-    <div class="card-top">
+    <div>
       <div class="card-row1">
         <div class="card-title">${(l.title || "Untitled listing").slice(0, 60)}</div>
         ${l.price ? `<div class="card-price">${l.price}<small>/mo</small></div>` : ""}
@@ -472,7 +501,7 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
         ${l.needsManualSend ? `<span class="tag tag-amber">Manual send</span>` : ""}
         ${l.smsSent ? `<span class="tag tag-green">SMS sent</span>` : ""}
       </div>
-      <div class="card-action-tags">${statusTag}</div>
+      <div>${statusTag}</div>
     </div>
   </div>
 </div>`;
@@ -481,31 +510,68 @@ ${DRY_RUN ? `<div class="dry-run-bar">⚠️ Dry run mode — messages not sendi
   </main>
 </div>
 
-<!-- SLIDE PANEL -->
 <div class="panel-overlay" id="overlay" onclick="closePanel()"></div>
-<div class="panel" id="panel">
-  <div id="panel-content"></div>
-</div>
+<div class="panel" id="panel"><div id="panel-content"></div></div>
 
 <script>
 const listings = ${JSON.stringify(listings)};
 const actionMap = ${JSON.stringify(actionMap)};
 const commentMap = ${JSON.stringify(commentMap)};
 const newIds = ${JSON.stringify(newIds)};
-let currentUser = localStorage.getItem("sublet_user");
-if (currentUser) document.querySelectorAll(".user-btn").forEach(b => { if(b.textContent.includes(currentUser)) b.classList.add("active"); });
 
-// Mark seen after 3s
+// User dropdown
+let currentUser = localStorage.getItem("sublet_user");
+let currentUserColor = localStorage.getItem("sublet_user_color") || "";
+if (currentUser) restoreUser();
+
+function restoreUser() {
+  const colorMap = { Alex: "", Julian: "j", Nora: "n", Marco: "m" };
+  const color = colorMap[currentUser] || "";
+  document.getElementById("nav-user-label").textContent = currentUser;
+  const av = document.getElementById("nav-avatar");
+  av.textContent = currentUser[0];
+  av.className = "user-avatar-sm" + (color ? " " + color : "");
+  av.style.display = "flex";
+  document.getElementById("user-dropdown-btn").classList.add("has-user");
+  document.querySelectorAll(".user-option").forEach(o => {
+    o.classList.toggle("active", o.textContent.trim().startsWith(currentUser));
+  });
+}
+
+function toggleDropdown() {
+  const menu = document.getElementById("user-dropdown-menu");
+  const btn = document.getElementById("user-dropdown-btn");
+  menu.classList.toggle("open");
+  btn.classList.toggle("open");
+}
+
+function setUser(name, initial, colorClass) {
+  currentUser = name;
+  localStorage.setItem("sublet_user", name);
+  document.getElementById("nav-user-label").textContent = name;
+  const av = document.getElementById("nav-avatar");
+  av.textContent = initial;
+  av.className = "user-avatar-sm" + (colorClass ? " " + colorClass : "");
+  av.style.display = "flex";
+  document.getElementById("user-dropdown-btn").classList.add("has-user");
+  document.querySelectorAll(".user-option").forEach(o => o.classList.remove("active"));
+  event.currentTarget.classList.add("active");
+  document.getElementById("user-dropdown-menu").classList.remove("open");
+  document.getElementById("user-dropdown-btn").classList.remove("open");
+}
+
+document.addEventListener("click", e => {
+  const wrap = document.getElementById("user-dropdown-wrap");
+  if (!wrap.contains(e.target)) {
+    document.getElementById("user-dropdown-menu").classList.remove("open");
+    document.getElementById("user-dropdown-btn").classList.remove("open");
+  }
+});
+
 if (newIds.length > 0) setTimeout(() => {
   fetch("/seen", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ listingIds: newIds, userName: localStorage.getItem("sublet_user") || "unknown" }) });
 }, 3000);
 
-function setUser(name, btn) {
-  currentUser = name; localStorage.setItem("sublet_user", name);
-  document.querySelectorAll(".user-btn").forEach(b => b.classList.remove("active")); btn.classList.add("active");
-}
-
-// Panel
 function openPanel(id) {
   const l = listings.find(x => x.id === id); if (!l) return;
   const la = actionMap[id] || [];
@@ -515,25 +581,25 @@ function openPanel(id) {
   const va = la.find(a => a.action === "viewing");
   const pa = la.find(a => a.action === "pass" || a.action === "skipped");
   const sc = (l.score || 0) >= 7 ? "score-high" : (l.score || 0) >= 5 ? "score-mid" : "score-low";
-  const timeAgo = t => { const s = Math.floor((Date.now() - new Date(t))/1000); if(s<60) return "just now"; if(s<3600) return Math.floor(s/60)+"m ago"; if(s<86400) return Math.floor(s/3600)+"h ago"; return Math.floor(s/86400)+"d ago"; };
-  const avCls = n => n==="Julian"?"j":n==="Nora"?"n":"";
+  const timeAgo = t => { const s = Math.floor((Date.now()-new Date(t))/1000); if(s<60) return "just now"; if(s<3600) return Math.floor(s/60)+"m ago"; if(s<86400) return Math.floor(s/3600)+"h ago"; return Math.floor(s/86400)+"d ago"; };
+  const avCls = n => n==="Julian"?"j":n==="Nora"?"n":n==="Marco"?"m":"";
 
   document.getElementById("panel-content").innerHTML = \`
     <div class="panel-header">
       <div style="flex:1;min-width:0">
         <div class="panel-title">\${(l.title||"Untitled").replace(/</g,"&lt;")}</div>
-        \${l.price ? \`<div class="panel-price">\${l.price}<span style="font-size:13px;font-weight:400;color:var(--gray-400)">/mo</span></div>\` : ""}
-        <div class="panel-meta">📍 \${l.location || "Manhattan"} \${l.bedrooms ? "· 🛏 "+l.bedrooms+"BR" : ""} \${l.availableFrom ? "· 📅 "+l.availableFrom : ""}</div>
+        \${l.price?\`<div class="panel-price">\${l.price}<span style="font-size:13px;font-weight:400;color:var(--gray-400)">/mo</span></div>\`:""}
+        <div class="panel-meta">📍 \${l.location||"Manhattan"}\${l.bedrooms?" · 🛏 "+l.bedrooms+"BR":""}\${l.availableFrom?" · 📅 "+l.availableFrom:""}</div>
       </div>
       <button class="panel-close" onclick="closePanel()">✕</button>
     </div>
-    \${l.pics?.[0] ? \`<img class="panel-img" src="\${l.pics[0]}" alt="">\` : ""}
+    \${l.pics?.[0]?\`<img class="panel-img" src="\${l.pics[0]}" alt="">\`:""}
     <div class="panel-body">
-      \${l.score ? \`<div class="panel-section"><div class="panel-section-title">Match Score</div><div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--gray-50);border-radius:var(--radius);border:1px solid var(--gray-200)"><span class="score-badge \${sc}" style="position:static;font-size:18px;padding:6px 14px">\${l.score}/10</span><span style="font-size:13px;color:var(--gray-500);font-style:italic">\${l.scoreReason||""}</span></div></div>\` : ""}
-      \${l.post ? \`<div class="panel-section"><div class="panel-section-title">Description</div><p style="font-size:13px;color:var(--gray-600);line-height:1.7">\${l.post.slice(0,600).replace(/</g,"&lt;")}</p></div>\` : ""}
-      \${l.amenities?.length ? \`<div class="panel-section"><div class="panel-section-title">Amenities</div><div class="amenity-list">\${l.amenities.map(a=>\`<span class="amenity">\${a}</span>\`).join("")}</div></div>\` : ""}
+      \${l.score?\`<div class="panel-section"><div class="panel-section-title">Match Score</div><div style="display:flex;align-items:center;gap:12px;padding:12px;background:var(--gray-50);border-radius:var(--radius);border:1px solid var(--gray-200)"><span class="score-badge \${sc}" style="position:static;font-size:16px;padding:6px 14px">\${l.score}/10</span><span style="font-size:13px;color:var(--gray-500);font-style:italic">\${l.scoreReason||""}</span></div></div>\`:""}
+      \${l.post?\`<div class="panel-section"><div class="panel-section-title">Description</div><p style="font-size:13px;color:var(--gray-600);line-height:1.7">\${l.post.slice(0,600).replace(/</g,"&lt;")}</p></div>\`:""}
+      \${l.amenities?.length?\`<div class="panel-section"><div class="panel-section-title">Amenities</div><div class="amenity-list">\${l.amenities.map(a=>\`<span class="amenity">\${a}</span>\`).join("")}</div></div>\`:""}
       <div class="panel-section"><a class="map-btn" href="https://maps.google.com?q=\${encodeURIComponent((l.address?.street||l.location||"Manhattan")+" New York NY")}" target="_blank">🗺 View on Google Maps →</a></div>
-      \${l.drafts ? \`
+      \${l.drafts?\`
       <div class="panel-section">
         <div class="panel-section-title">Message Drafts</div>
         <div class="draft-tabs">
@@ -546,20 +612,20 @@ function openPanel(id) {
         <div id="dp-email" class="draft-pane"><div class="draft-subject"><strong>Subject:</strong> \${(l.drafts.email?.subject||"").replace(/</g,"&lt;")}</div><div class="draft-box"><textarea class="draft-ta">\${(l.drafts.email?.body||"").replace(/</g,"&lt;")}</textarea><button class="copy-btn" onclick="copyDraft(this)">Copy</button></div></div>
         <div id="dp-sms" class="draft-pane"><div class="draft-box"><textarea class="draft-ta">\${(l.drafts.sms||"").replace(/</g,"&lt;")}</textarea><button class="copy-btn" onclick="copyDraft(this)">Copy</button></div></div>
         <div id="dp-whatsapp" class="draft-pane"><div class="draft-box"><textarea class="draft-ta">\${(l.drafts.whatsapp||"").replace(/</g,"&lt;")}</textarea><button class="copy-btn" onclick="copyDraft(this)">Copy</button></div></div>
-      </div>\` : ""}
+      </div>\`:""}
       <div class="panel-section">
         <div class="panel-section-title">Outreach Status</div>
         <div class="action-btns-panel">
-          \${!ca ? \`<button class="action-btn btn-contacted" onclick="doAction('\${l.id}','contacted')">✓ Contacted</button>\` : ""}
-          \${ca && !ra ? \`<button class="action-btn btn-reply" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\` : ""}
-          \${(ca||ra) && !va ? \`<button class="action-btn btn-viewing" onclick="doAction('\${l.id}','viewing')">📅 Viewing scheduled</button>\` : ""}
-          \${!pa ? \`<button class="action-btn btn-pass" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\` : ""}
+          \${!ca?\`<button class="action-btn btn-contacted" onclick="doAction('\${l.id}','contacted')">✓ Contacted</button>\`:""}
+          \${ca&&!ra?\`<button class="action-btn btn-reply" onclick="doAction('\${l.id}','reply')">💬 Got reply</button>\`:""}
+          \${(ca||ra)&&!va?\`<button class="action-btn btn-viewing" onclick="doAction('\${l.id}','viewing')">📅 Viewing scheduled</button>\`:""}
+          \${!pa?\`<button class="action-btn btn-pass" onclick="doAction('\${l.id}','pass')">✕ Pass</button>\`:""}
         </div>
-        \${la.length ? \`<div class="action-log">\${la.map(a=>\`<div class="action-log-item"><span>\${a.action==="contacted"?"✓":a.action==="reply"?"💬":a.action==="viewing"?"📅":"✕"}</span><strong>\${a.user_name}</strong> \${a.action==="contacted"?"contacted":a.action==="reply"?"got a reply":a.action==="viewing"?"scheduled a viewing":"passed"} · \${timeAgo(a.created_at)}</div>\`).join("")}</div>\` : ""}
+        \${la.length?\`<div class="action-log">\${la.map(a=>\`<div class="action-log-item">\${a.action==="contacted"?"✓":a.action==="reply"?"💬":a.action==="viewing"?"📅":"✕"} <strong>\${a.user_name}</strong> \${a.action==="contacted"?"contacted":a.action==="reply"?"got a reply":a.action==="viewing"?"scheduled a viewing":"passed"} · \${timeAgo(a.created_at)}</div>\`).join("")}</div>\`:""}
       </div>
       <div class="panel-section">
         <div class="panel-section-title">Notes</div>
-        <div class="comment-list" id="comment-list-\${l.id}">
+        <div class="comment-list">
           \${lc.map(c=>\`<div class="comment"><div class="c-avatar \${avCls(c.user_name)}">\${c.user_name[0]}</div><div class="c-bubble"><div class="c-meta">\${c.user_name} · \${timeAgo(c.created_at)}</div><div class="c-body">\${c.body.replace(/</g,"&lt;")}</div></div></div>\`).join("")}
         </div>
         <div class="comment-input-wrap">
@@ -593,13 +659,13 @@ function copyDraft(btn) {
 }
 
 async function doAction(listingId, action) {
-  if (!currentUser) { alert("Select your name at the top first."); return; }
+  if (!currentUser) { alert("Select your name from the dropdown first."); return; }
   await fetch("/action", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ listingId, userName: currentUser, action }) });
   location.reload();
 }
 
 async function sendComment(listingId) {
-  if (!currentUser) { alert("Select your name at the top first."); return; }
+  if (!currentUser) { alert("Select your name from the dropdown first."); return; }
   const input = document.getElementById("ci-"+listingId);
   const body = input.value.trim(); if (!body) return;
   input.value = "";
@@ -607,7 +673,6 @@ async function sendComment(listingId) {
   location.reload();
 }
 
-// Filters
 let activeFilter = "all", activeHood = "all", maxPriceFilter = ${maxPrice};
 
 function setFilter(f, btn) {
@@ -629,32 +694,32 @@ function applyFilters() {
   let visible = 0;
   document.querySelectorAll(".card").forEach(card => {
     const status = card.dataset.status, isNew = card.dataset.isnew === "true";
-    const price = parseInt(card.dataset.price) || 0, loc = card.dataset.loc || "";
-    const statusOk = activeFilter === "all" || (activeFilter === "new" && isNew) || status === activeFilter;
-    const hoodOk = activeHood === "all" || loc.includes(activeHood);
-    const priceOk = price === 0 || price <= maxPriceFilter;
-    const show = statusOk && hoodOk && priceOk;
+    const price = parseInt(card.dataset.price)||0, loc = card.dataset.loc||"";
+    const statusOk = activeFilter==="all"||(activeFilter==="new"&&isNew)||status===activeFilter;
+    const hoodOk = activeHood==="all"||loc.includes(activeHood);
+    const priceOk = price===0||price<=maxPriceFilter;
+    const show = statusOk&&hoodOk&&priceOk;
     card.style.display = show ? "grid" : "none";
     if (show) visible++;
   });
-  document.getElementById("results-count").textContent = visible + " listing" + (visible !== 1 ? "s" : "");
+  document.getElementById("results-count").textContent = visible+" listing"+(visible!==1?"s":"");
   updateStats();
 }
 function sortCards() {
   const sort = document.getElementById("sort-select").value;
   const container = document.getElementById("cards-container");
   const cards = Array.from(container.querySelectorAll(".card"));
-  cards.sort((a, b) => {
-    if (sort === "score") return (parseInt(b.dataset.score)||0)-(parseInt(a.dataset.score)||0);
-    if (sort === "price-low") return (parseInt(a.dataset.price)||0)-(parseInt(b.dataset.price)||0);
-    if (sort === "price-high") return (parseInt(b.dataset.price)||0)-(parseInt(a.dataset.price)||0);
+  cards.sort((a,b) => {
+    if(sort==="score") return (parseInt(b.dataset.score)||0)-(parseInt(a.dataset.score)||0);
+    if(sort==="price-low") return (parseInt(a.dataset.price)||0)-(parseInt(b.dataset.price)||0);
+    if(sort==="price-high") return (parseInt(b.dataset.price)||0)-(parseInt(a.dataset.price)||0);
     return new Date(b.dataset.datetime)-new Date(a.dataset.datetime);
   });
   cards.forEach(c => container.appendChild(c));
 }
 function updateStats() {
   const cards = document.querySelectorAll(".card");
-  let pending = 0, contacted = 0;
+  let pending=0, contacted=0;
   cards.forEach(c => { if(c.dataset.status==="pending") pending++; if(["contacted","reply","viewing"].includes(c.dataset.status)) contacted++; });
   document.getElementById("s-pending").textContent = pending;
   document.getElementById("s-contacted").textContent = contacted;
