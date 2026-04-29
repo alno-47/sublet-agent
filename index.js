@@ -23,43 +23,84 @@ function passes(listing) {
 }
 
 async function fetchListings() {
-  const url = "https://newyork.craigslist.org/search/sub?format=json&hasPic=1&min_bedrooms=2&max_bedrooms=3";
+  const url = "https://newyork.craigslist.org/search/mnh/sub?min_bedrooms=2&max_bedrooms=3";
   const res = await fetch(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "application/json, text/plain, */*",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
-      "Referer": "https://newyork.craigslist.org/",
     }
   });
   console.log("Craigslist fetch status:", res.status);
-  const text = await res.text();
-  console.log("First 300 chars:", text.slice(0, 300));
+  const html = await res.text();
 
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch (e) {
-    console.log("Not JSON, trying to parse HTML...");
-    return [];
+  // Craigslist embeds listing data in a script tag as JSON
+  const match = html.match(/window\.__NEXT_DATA__\s*=\s*({[\s\S]*?})<\/script>/) ||
+                html.match(/cl\.search\.data\s*=\s*({[\s\S]*?});\s*\n/) ||
+                html.match(/"listings"\s*:\s*(\[[\s\S]*?\])\s*[,}]/);
+
+  if (match) {
+    console.log("Found embedded JSON data");
+    try {
+      const data = JSON.parse(match[1]);
+      const listings = data?.props?.pageProps?.searchResults?.data?.results ||
+                       data?.listings || data || [];
+      console.log(`Parsed ${listings.length} listings from JSON`);
+      return listings.map(item => ({
+        id: String(item.id || item.pid || Math.random()),
+        title: item.title || item.name || "",
+        url: item.url || `https://newyork.craigslist.org${item.path || ""}`,
+        post: item.body || item.description || item.snippet || "",
+        price: item.price ? `$${item.price}` : "",
+        bedrooms: item.bedrooms || item.br || 0,
+        location: item.neighborhood || item.location || "Manhattan, NY",
+        availableFrom: item.availableFrom || "",
+        datetime: item.date || item.postedAt || "",
+        phoneNumbers: [],
+        platform: "Craigslist",
+        address: { city: "New York" },
+      }));
+    } catch (e) {
+      console.log("JSON parse failed:", e.message);
+    }
   }
 
-  const items = (data.items || data || []).map(item => ({
-    id: item.id || item.pid || String(Math.random()),
-    title: item.title || item.name || "",
-    url: item.url || `https://newyork.craigslist.org${item.path || ""}`,
-    post: item.body || item.description || "",
-    price: item.price ? `$${item.price}` : "",
-    bedrooms: item.bedrooms || 0,
-    location: item.neighborhood || item.location || "Manhattan, NY",
-    availableFrom: "",
-    datetime: item.date || item.posted_at || "",
-    phoneNumbers: [],
-    platform: "Craigslist",
-    address: { city: "New York" },
-  }));
+  // Fallback: parse listing links directly from HTML
+  console.log("Falling back to HTML link parsing...");
+  const items = [];
+  const linkPattern = /href="(https:\/\/newyork\.craigslist\.org\/mnh\/sub\/d\/[^"]+)"/g;
+  const titlePattern = /class="posting-title"[^>]*>\s*<span[^>]*>([^<]+)<\/span>/g;
+  const pricePattern = /class="price">(\$[\d,]+)<\/span>/g;
 
-  console.log(`Fetched ${items.length} items`);
+  let linkMatch;
+  const links = [];
+  while ((linkMatch = linkPattern.exec(html)) !== null) {
+    links.push(linkMatch[1]);
+  }
+
+  console.log(`Found ${links.length} listing links in HTML`);
+
+  for (const link of links.slice(0, 50)) {
+    const idMatch = link.match(/(\d+)\.html/);
+    const id = idMatch ? idMatch[1] : Math.random().toString(36).slice(2);
+    const titleFromUrl = link.split("/").pop().replace(".html", "").replace(/-/g, " ");
+    items.push({
+      id,
+      title: titleFromUrl,
+      url: link,
+      post: "",
+      price: "",
+      bedrooms: 2,
+      location: "Manhattan, NY",
+      availableFrom: "",
+      datetime: new Date().toISOString(),
+      phoneNumbers: [],
+      platform: "Craigslist",
+      address: { city: "New York" },
+    });
+  }
+
+  console.log(`Returning ${items.length} items from HTML fallback`);
   return items;
 }
 
