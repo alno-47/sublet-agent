@@ -85,6 +85,7 @@ async function sendSmsAlert(count) {
 }
 
 async function fetchAndProcess() {
+  console.log("APIFY_TOKEN set:", !!APIFY_TOKEN, "length:", APIFY_TOKEN?.length);
   console.log("Fetching listings from Apify...");
   const items = await runApifyScrape();
   const eligible = items.filter(passes);
